@@ -5,16 +5,19 @@
 const readline = require('readline');
 
 const fs = require('fs');
+//const fsp = require('fs/promises');
 const stream = require('stream');
 const { promisify, inherits } = require('util');
 const yaml = require('yaml');
 
 const name = "ownbox";
 
-var confFile = name + '.json';
+var confFile = "config" + '.json';
 
 var verbose = false;
 var interactive = false;
+
+var conf = (fs.existsSync(confFile) && JSON.parse(fs.readFileSync(confFile))) || {};
 
 var options = Object.assign({
   verbose: false,
@@ -66,7 +69,6 @@ JsonLineWriter.prototype._transform = function(obj, enc, callback) {
 //JsonLineWriter.prototype._writev(objs, callback) {
 //}
 
-var conf = (fs.existsSync(confFile) && JSON.parse(fs.readFileSync(confFile))) || {};
 
 // All numbers are stored as integers in units of 0.01 SEK
 //
@@ -184,7 +186,6 @@ function SEBcsv2json(cb) {
 	"info": parts[3],
 	"belopp": atoi(parts[4]),
 	"saldo": atoi(parts[5]),
-	"regdatum": false,
       }
 
       if(linenum === 1) {
@@ -249,8 +250,6 @@ function SKVcsv2json(cb) {
 
       var res = {
 	"bokföringsdatum": parts[0],
-	"valutadatum":parts[0],
-	"verifikationsnummer": "SKV"+parts[0]+':'+vernum,
 	"info": parts[1],
 	"belopp": atoi(parts[2]),
 	"saldo": saldo
@@ -276,15 +275,83 @@ const company = (fs.existsSync(confFile + ".yml") && JSON.parse(fs.readFileSync(
 
 */
 
+/*
+  JSON book entry
+
+  { "label": "KONTO", "kontonr": "1510", "kontonamn":"Kundfodringar", kontotyp: "T", ib: 121000 }
+  { "label": "KONTO", "kontonr": "1911", "kontonamn":"Bankkonto", kontotyp: "T", ib: 453000 }
+  { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]}}
+
+*/
+
+console.log("Räkenskapsår: " + options.räkenskapsår);
+
+var startDate;
+var endDate;
+
+function setDates() {
+  var rar = options.räkenskapsår || "0101 - 1231";
+
+  var now = new Date();
+  var [start,end] = rar.split(" - ").map(d => d.match(/\d\d/g).map(n => 1*n));
+
+  startDate = new Date(now.getFullYear(), start[0]-1, start[1]);
+  endDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1]+1);
+
+  console.log("startDate: " + startDate);
+  console.log("endDate: " + endDate);
+}
+
+setDates();
+
+function dateRangeFilter(from, to, field) {
+  return function(t) {
+    return t[field] >= from && t[field] < to;
+  }
+}
+
 var accounts = {};
-var transactions = {};
+
+/* account
+{
+  kontonr: "1510"
+  kontonamn: "Kundfodringar"
+  kontotyp: "", // T, S, K, I
+
+  ib: 121000,
+  saldo: 9200,  // maps against res or ub during export
+}
+*/
+
+var transactions = [];
+/*
+{
+  kontonr: "1510",
+  objekt: [],
+  belopp: -111800,
+  transdat: "2020-07-01",
+  transtext: "Inbetalning faktura 45",
+}
+*/
+
+
+var verifications = [];
+/*
+{
+  serie: 'A',
+  vernr: 1,
+  verdatum: "2020-07-01",
+  vertext: "Inbetalning faktura 45",
+  regdatum: "2020-08-13",
+  transactions: { },
+}
+*/
 
 
 
+function readJsonStream(rs, array) {
+  array = array || [];
 
-
-
-function readBook(rs) {
   return new Promise( (resolve, reject) => {
     var lineReader = readline.createInterface({
       input: rs
@@ -292,21 +359,30 @@ function readBook(rs) {
 
     lineReader.on('line', function (line) {
       var entry = line && JSON.parse(line);
+      entry && array.push(entry);
 
     });
 
     lineReader.on('close', function () {
-      debug('all lines read, count:',  map.size);
-      cb && cb(false, map);
+      return resolve(array);
     });
 
     rs.on('error', function (err) {
-      logger.error('Failed read %s:',  err);
-      cb && cb(err);
+      //console.log('readJsonStream Failed: ', err);
+      return reject(err);
     });
   });
 }
 
+function readJsonFile(filename, array) {
+  return readJsonStream(fs.createReadStream(filename), array);
+};
+
+function safeReadJsonFile(filename, array) {
+  return readJsonFile(filename, array)
+    .then( res => Promise.resolve(res))
+    .catch(err => (err.code === 'ENOENT') ? Promise.resolve(array) : Promise.reject(err));
+}
 
 var cmds = {
   atoi: function (str) {
@@ -363,7 +439,31 @@ var cmds = {
     lineReader(fs.createReadStream(filename, { encoding: 'latin1'})).on('line', (line) => t(line, os));
     */
   },
-  mergetransactions: function() {
+  mergetransactions: function(transactionsFile, sebFile, skvFile) {
+    safeReadJsonFile(transactionsFile, transactions).then( () => {
+      console.log("transactions length: " + transactions.length);
+      return Promise.all([readJsonFile(sebFile), readJsonFile(skvFile)]).then( ([seb, skv]) => {
+	console.log("seb: " + seb.length);
+	console.log("skv: " + skv.length);
+
+	var mergedTransactions = seb.map(t => ({
+	  kontonr: "1911",
+	  belopp: t.belopp,
+	  transdat: new Date(t.bokföringsdatum),
+	  transtext: t.info,
+	})).concat(skv.map(t => ({
+	  kontonr: "1630",
+	  belopp: t.belopp,
+	  transdat: new Date(t.bokföringsdatum),
+	  transtext: t.info,
+	}))).filter(dateRangeFilter(startDate, endDate, 'transdat')).sort( (a,b) => a.transdat - b.transdat);
+
+	mergedTransactions.forEach(t => console.log(JSON.stringify(t)));
+
+	//var sebTransactions = seb.filter(dateRangeFilter(startDate, endDate))
+
+      });
+    });
   }
 };
 
