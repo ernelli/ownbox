@@ -23,8 +23,20 @@ var options = Object.assign({
   verbose: false,
   interactive: false,
   inform: 'json',
-  outform: 'jsonl'
+  outform: 'jsonl',
+  rar: 0,
 },conf);
+
+var opts = {
+  "-v": "verbose",
+};
+
+function dasher(str) {
+  var differ = str.toLowerCase();
+  return differ.split("").reduce( (a, v, i) => i && str.indexOf(v,i) !== i ? a.concat("-"+v) : a.concat(v), "");
+}
+
+Object.keys(options).forEach(k => { opts['--' + dasher(k)] = k; });
 
 var debug = function debug() {
   console.log.apply(this, arguments);
@@ -293,6 +305,9 @@ function setDates() {
   var rar = options.räkenskapsår || "0101 - 1231";
 
   var now = new Date();
+
+  now.setFullYear(now.getFullYear() + options.rar);
+
   var [start,end] = rar.split(" - ").map(d => d.match(/\d\d/g).map(n => 1*n));
 
   startDate = new Date(now.getFullYear(), start[0]-1, start[1]);
@@ -302,12 +317,17 @@ function setDates() {
   console.log("endDate: " + endDate);
 }
 
-setDates();
-
 function dateRangeFilter(from, to, field) {
   return function(t) {
     return t[field] >= from && t[field] < to;
   }
+}
+
+
+function validateTransactions(transactions) {
+  return transactions.reduce( (a,v,i) => {
+  }, true);
+
 }
 
 var accounts = {};
@@ -456,9 +476,15 @@ var cmds = {
 	  belopp: t.belopp,
 	  transdat: new Date(t.bokföringsdatum),
 	  transtext: t.info,
-	}))).filter(dateRangeFilter(startDate, endDate, 'transdat')).sort( (a,b) => a.transdat - b.transdat);
+	}))).filter(dateRangeFilter(startDate, endDate, 'transdat')).sort( (a,b) => {
+
+	  return a.transdat.getTime() !== b.transdat.getTime() ? a.transdat - b.transdat :
+	    (a.transtext > b.transtext ? 1 : -1);
+	});
 
 	mergedTransactions.forEach(t => console.log(JSON.stringify(t)));
+
+	//validateTransactions(mergedTransactions);
 
 	//var sebTransactions = seb.filter(dateRangeFilter(startDate, endDate))
 
@@ -510,6 +536,8 @@ interactive = options.interactive && !options.nonInteractive;
 if(!options.debug) {
   debug = function() {};
 }
+
+setDates();
 
 if(verbose) {
   debug("run command: " + ('<' + args[0] + '>' || "<none>") + ", using options: " + JSON.stringify(options, null, 2));
