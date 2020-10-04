@@ -194,8 +194,7 @@ function SEBcsv2json(cb) {
       var res = {
 	"bokföringsdatum": parts[0],
 	"valutadatum":parts[1],
-	"verifikationsnummer": "SEB"+parts[2],
-	"info": parts[3],
+	"info": parts[3].replace(/,/g,'.') + ',' + parts[2],
 	"belopp": atoi(parts[4]),
 	"saldo": atoi(parts[5]),
       }
@@ -323,11 +322,83 @@ function dateRangeFilter(from, to, field) {
   }
 }
 
+function isTransactionsEqual(a, b) {
+  return 1*a.transdat === 1*b.transdat &&
+    a.belopp === b.belopp &&
+    a.transtext === b.transtext &&
+    a.kontonr === b.kontonr;
+}
 
+function transactionSortFunction(a,b) {
+  //console.log("sort test: ", a.transdat, b.transdat);
+
+  return a.transdat.getTime() !== b.transdat.getTime() ? a.transdat - b.transdat :
+    (a.transtext > b.transtext ? 1 : -1);
+}
+
+
+// check that all transactions are unique, e.g no duplicates
 function validateTransactions(transactions) {
   return transactions.reduce( (a,v,i) => {
-  }, true);
+    if(a) {
+      if(i > 0) {
+	return !isTransactionsEqual(v, transactions[i-1]) && transactionSortFunction(v, transactions[i-1]) > 0;
+	/*
+	var p = transactions[i-1];
+	var res =  1*v.transdat !== 1*p.transdat ||
+	    v.belopp !== p.belopp ||
+	    v.transtext != p.transtext;
 
+	return res;
+	*/
+      } else {
+	return true;
+      }
+    } else {
+      return false;
+    }
+  }, true);
+}
+
+// add transactions from newTransactions not present in transactions
+function addTranscations(transactions, newTransactions) {
+  var addedTransactions = [];
+
+  var ti = 0, ni = 0;
+
+  while(transactions[ti] || newTransactions[ni]) {
+    //console.log("ni: %d, ti: %d", ni, ti);
+    if(transactions[ti] && newTransactions[ni]) {
+      //console.log("old t: ", transactions[ti]);
+      //console.log("new t: ", newTransactions[ni]);
+      if(isTransactionsEqual(transactions[ti], newTransactions[ni])) {
+	ti++; // keep old
+	ni++; // skip new
+      } else if(transactionSortFunction(transactions[ti], newTransactions[ni]) > 0) {
+	transactions.splice(ti, 0, newTransactions[ni]);
+	addedTransactions.push(newTransactions[ni]);
+	ti++;
+	ni++;
+      } else {
+	ti++;
+      }
+    } else if(newTransactions[ni]) {
+      addedTransactions.push(newTransactions[ni]);
+      ni++;
+    } else {
+      break;
+    }
+  }
+
+  console.log("added transactions:");
+  addedTransactions.forEach(t => console.log(JSON.stringify(t)));
+  console.log("-------------------------------:");
+
+  if(!validateTransactions(transactions)) {
+    throw("transactions invalid after add");
+  }
+
+  return addedTransactions.length;
 }
 
 var accounts = {};
@@ -379,6 +450,9 @@ function readJsonStream(rs, array) {
 
     lineReader.on('line', function (line) {
       var entry = line && JSON.parse(line);
+      if(entry && entry.transdat) {
+	entry.transdat = new Date(entry.transdat);
+      }
       entry && array.push(entry);
 
     });
@@ -482,11 +556,17 @@ var cmds = {
 	    (a.transtext > b.transtext ? 1 : -1);
 	});
 
-	mergedTransactions.forEach(t => console.log(JSON.stringify(t)));
+	if(!validateTransactions(mergedTransactions)) {
+	  console.log("merged transaction has duplicates!!!");
+	  return;
+	}
 
-	//validateTransactions(mergedTransactions);
+	//mergedTransactions.forEach(t => console.log(JSON.stringify(t)));
 
-	//var sebTransactions = seb.filter(dateRangeFilter(startDate, endDate))
+	var numAdded = addTranscations(transactions, mergedTransactions);
+	console.log("added %d transactions", numAdded);
+	numAdded = addTranscations(transactions, mergedTransactions);
+	console.log("second attempts, added %d transactions", numAdded);
 
       });
     });
