@@ -366,6 +366,8 @@ function addTranscations(transactions, newTransactions) {
 
   var ti = 0, ni = 0;
 
+  //console.log("add %d transactions to transacations: %d", newTransactions.length ,transactions.length);
+
   while(transactions[ti] || newTransactions[ni]) {
     //console.log("ni: %d, ti: %d", ni, ti);
     if(transactions[ti] && newTransactions[ni]) {
@@ -383,6 +385,7 @@ function addTranscations(transactions, newTransactions) {
 	ti++;
       }
     } else if(newTransactions[ni]) {
+      transactions.splice(ti, 0, newTransactions[ni]);
       addedTransactions.push(newTransactions[ni]);
       ni++;
     } else {
@@ -390,15 +393,15 @@ function addTranscations(transactions, newTransactions) {
     }
   }
 
-  console.log("added transactions:");
-  addedTransactions.forEach(t => console.log(JSON.stringify(t)));
-  console.log("-------------------------------:");
+//  console.log("added transactions:");
+//  addedTransactions.forEach(t => console.log(JSON.stringify(t)));
+//  console.log("-------------------------------:");
 
   if(!validateTransactions(transactions)) {
     throw("transactions invalid after add");
   }
 
-  return addedTransactions.length;
+  return addedTransactions;
 }
 
 var accounts = {};
@@ -535,10 +538,10 @@ var cmds = {
   },
   mergetransactions: function(transactionsFile, sebFile, skvFile) {
     safeReadJsonFile(transactionsFile, transactions).then( () => {
-      console.log("transactions length: " + transactions.length);
+      //console.log("transactions length: " + transactions.length);
       return Promise.all([readJsonFile(sebFile), readJsonFile(skvFile)]).then( ([seb, skv]) => {
-	console.log("seb: " + seb.length);
-	console.log("skv: " + skv.length);
+	//console.log("seb: " + seb.length);
+	//console.log("skv: " + skv.length);
 
 	var mergedTransactions = seb.map(t => ({
 	  kontonr: "1911",
@@ -563,11 +566,22 @@ var cmds = {
 
 	//mergedTransactions.forEach(t => console.log(JSON.stringify(t)));
 
-	var numAdded = addTranscations(transactions, mergedTransactions);
-	console.log("added %d transactions", numAdded);
-	numAdded = addTranscations(transactions, mergedTransactions);
-	console.log("second attempts, added %d transactions", numAdded);
+	var addedTransactions = addTranscations(transactions, mergedTransactions);
+	console.log("added %d transactions", addedTransactions.length);
 
+	//console.log("write file: " + transactionsFile);
+
+	var ws = fs.createWriteStream(transactionsFile);
+	ws.on('finish', () => {
+	  console.log("all data written");
+	});
+
+	transactions.forEach(t => {
+	  //console.log("write t: " + JSON.stringify(t).length);
+	  ws.write(JSON.stringify(t) + '\n');
+	});
+
+	ws.end();
       });
     });
   }
