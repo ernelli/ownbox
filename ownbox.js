@@ -101,7 +101,6 @@ JsonLineWriter.prototype._transform = function(obj, enc, callback) {
 //
 // * supported formats
 
-
 function add(a,b) {
   a += b;
   return a;
@@ -122,6 +121,11 @@ function div(a,b) {
   return a;
 }
 
+function compare(a,b) {
+  return Math.sign(a-b);
+}
+
+const ZERO = atoi("0");
 
 
 function atoi(str, decimal) {
@@ -425,9 +429,12 @@ var transactions = [];
   belopp: -111800,
   transdat: "2020-07-01",
   transtext: "Inbetalning faktura 45",
+  registred: "A1",
 }
 */
 
+var verificationSeries = 'A';
+var verificationNumber = 1;
 
 var verifications = [];
 /*
@@ -437,9 +444,51 @@ var verifications = [];
   verdatum: "2020-07-01",
   vertext: "Inbetalning faktura 45",
   regdatum: "2020-08-13",
-  transactions: { },
+  transactions: [],
 }
 */
+
+
+function validateVerification(ver) {
+  if(!ver.transactions || ver.transactions.length === 0) {
+    return false;
+  }
+
+  var sum = atoi("0");
+  ver.transactions.forEach(t => { sum = add(sum, t.belopp) });
+  if(compare(sum, ZERO) !== 0) {
+    console.log("transactions balance mismatch: " + itoa(sum));
+    return false;
+  }
+
+  return true;
+}
+
+
+function addVerification(ver) {
+
+  validateVerification(ver);
+
+
+  if(!ver.regdatum) {
+    ver.verdatum = ver.transactions[0].transdat;
+  }
+
+  ver.regdatum = Date.now();
+
+  ver.serie = verificationSeries;
+  ver.vernr = verificationNumber++;
+
+  const verId = ver.serie + ver.vernr;
+
+  ver.transactions.forEach(t => {
+    t.registred = verId;
+
+    
+  });
+
+  verifications.push(ver);
+}
 
 
 
@@ -488,6 +537,29 @@ var cmds = {
   },
   itoa: function(num) {
     console.log("itoa: " + itoa(1*num));
+  },
+  yaml: function() {
+    var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", transactions: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
+
+    console.log(yaml.stringify(ver));
+
+  },
+  ver: function() {
+    var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", transactions: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
+
+    console.log("validate: " + validateVerification(ver));
+
+    console.log("parse: " , yaml.parse(
+`
+label: VER
+serie: A
+vernr: "1"
+verdatum: 2020-07-01
+vertext: Inbetalning faktura 45
+1510: -111800
+1910: 111800
+`));
+
   },
 /*
   seb: function(infile, outfile) {
