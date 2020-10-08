@@ -25,6 +25,8 @@ var options = Object.assign({
   inform: 'json',
   outform: 'jsonl',
   rar: 0,
+  transactions: "transactions.json",
+  kontoplan: "Kontoplan_Normal_2020.csv",
 },conf);
 
 var opts = {
@@ -123,6 +125,10 @@ function div(a,b) {
 
 function compare(a,b) {
   return Math.sign(a-b);
+}
+
+function fromNumber(n) {
+  return Math.round(n*100);
 }
 
 const ZERO = atoi("0");
@@ -294,8 +300,8 @@ const company = (fs.existsSync(confFile + ".yml") && JSON.parse(fs.readFileSync(
   JSON book entry
 
   { "label": "KONTO", "kontonr": "1510", "kontonamn":"Kundfodringar", kontotyp: "T", ib: 121000 }
-  { "label": "KONTO", "kontonr": "1911", "kontonamn":"Bankkonto", kontotyp: "T", ib: 453000 }
-  { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]}}
+  { "label": "KONTO", "kontonr": "1930", "kontonamn":"Bankkonto", kontotyp: "T", ib: 453000 }
+  { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1930",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]}}
 
 */
 
@@ -339,7 +345,6 @@ function transactionSortFunction(a,b) {
   return a.transdat.getTime() !== b.transdat.getTime() ? a.transdat - b.transdat :
     (a.transtext > b.transtext ? 1 : -1);
 }
-
 
 // check that all transactions are unique, e.g no duplicates
 function validateTransactions(transactions) {
@@ -408,6 +413,51 @@ function addTranscations(transactions, newTransactions) {
   return addedTransactions;
 }
 
+var basKontoplan = {};
+var kontoGrupper = {};
+var kontoKlasser = {};
+
+// Urval:     ■ \u25a0
+// Ändring:   |  \u2759"
+function importBaskontoplan(filename) {
+  lineReader(fs.createReadStream(filename, { encoding: 'utf8'}).on('end', () => {
+    console.log("baskontoplan done");
+  })).on('line', (line) => {
+    //console.log("got line: " + line);
+    var parts = line.split(',').map(p => {
+      return p.replace(/"/g, '').trim();
+    });
+    //console.log("parts: ", parts);
+
+    //if(parts[1] && parts[1].match(/^\d$/)) {
+    //  console.log("kontoklass: " + parts[1] + " : " + parts[2]);
+    //}
+
+    if(parts[1]) {
+      if(parts[1].match(/^\d\d\d\d$/)) {
+	console.log(parts[1] + " : " + parts[2]);
+	basKontoplan[parts[1]] = {
+	  kontonamn: parts[2],
+	};
+      } else if( parts[1].match(/^\d\d$/)) {
+	kontoGrupper[parts[1]] = parts[2];
+	console.log("kontogrupp: " + parts[1] + " : " + parts[2]);
+      }	else if( parts[1].match(/^\d\d.\d\d/)) {
+	kontoGrupper[parts[1]] = parts[2];
+	console.log("kontogrupp: " + parts[1] + " : " + parts[2]);
+      } else if(parts[1].match(/^\d$/)) {
+	console.log("kontoklass: " + parts[1] + " : " + parts[2]);
+      } else {
+	console.log("unmatched group: [" + parts[1] + "] : " + parts[2]);
+      }
+    }
+
+    if(parts[4] && parts[4].match(/^\d\d\d\d$/)) {
+      console.log(parts[4] + " : " + parts[5]);
+    }
+  });
+}
+
 var accounts = {};
 
 /* account
@@ -420,6 +470,14 @@ var accounts = {};
   saldo: 9200,  // maps against res or ub during export
 }
 */
+
+function addAccount(kontonr, kontonamn, kontotyp) {
+  var account = {
+    kontonr: kontonr,
+    kontonamn: kontonamn || baskonto[kontonr].kontonamn,
+    kontotyp: kontotyp || basKontotyp(kontonr)
+  };
+}
 
 var transactions = [];
 /*
@@ -449,6 +507,10 @@ var verifications = [];
 */
 
 
+function verificationSortFunction(a,b) {
+  return  a.verdatum - b.verdatum;
+}
+
 function validateVerification(ver) {
   if(!ver.transactions || ver.transactions.length === 0) {
     return false;
@@ -467,13 +529,21 @@ function validateVerification(ver) {
 
 function addVerification(ver) {
 
-  validateVerification(ver);
+  if(!validateVerification(ver)) {
+    throw("Invalid verification");
+  }
 
+  ver.transactions.forEach(t => {
+    if(t.registred) {
+      throw("Transaction already registred in verification: " + t.registred + ", " + JSON.stringify(t));
+    }
+  });
 
-  if(!ver.regdatum) {
+  if(!ver.verdatum) {
     ver.verdatum = ver.transactions[0].transdat;
   }
 
+  // always use current date as regdatum
   ver.regdatum = Date.now();
 
   ver.serie = verificationSeries;
@@ -483,13 +553,34 @@ function addVerification(ver) {
 
   ver.transactions.forEach(t => {
     t.registred = verId;
-
-    
+    if(!accounts[t.kontonr]) {
+      addAccount(t.kontonr);
+    }
   });
 
   verifications.push(ver);
+  verifications.sort(verificationSortFunction);
 }
 
+
+function matchTransaction(t, reg, kontonr, belopp) {
+  var m = [ (!reg || !!t.transtext.match(reg)) , (!kontonr || t.kontonr === kontonr) , (!belopp || t.belopp === belopp) ];
+
+  //console.log("matcher: ", m, JSON.stringify(t));
+
+  return (!reg || t.transtext.match(reg)) && (!kontonr || t.kontonr === kontonr) && (!belopp || t.belopp === belopp);
+}
+
+////////////////////////////////////////
+//
+// autobook: Automatically book transactions into verification 
+
+function autobook(t) {
+  if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000))) {
+    console.log("autobook SEB pension" + JSON.stringify(t));
+    add
+  }
+}
 
 
 function readJsonStream(rs, array) {
@@ -543,6 +634,18 @@ var cmds = {
 
     console.log(yaml.stringify(ver));
 
+  },
+  baskontoplan: function(filename) {
+    importBaskontoplan(filename || options.kontoplan);
+  },
+  autobook: function() {
+    safeReadJsonFile(options.transactions, transactions).then( () => {
+      console.log("transactions read, num: " + transactions.length);
+
+      transactions.forEach(t => {
+	var ver = autobook(t);
+      });
+    });
   },
   ver: function() {
     var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", transactions: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
@@ -616,7 +719,7 @@ vertext: Inbetalning faktura 45
 	//console.log("skv: " + skv.length);
 
 	var mergedTransactions = seb.map(t => ({
-	  kontonr: "1911",
+	  kontonr: "1930",
 	  belopp: t.belopp,
 	  transdat: new Date(t.bokföringsdatum),
 	  transtext: t.info,
