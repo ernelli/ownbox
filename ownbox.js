@@ -26,8 +26,15 @@ var options = Object.assign({
   outform: 'jsonl',
   rar: 0,
   transactions: "transactions.json",
-  kontoplan: "Kontoplan_Normal_2020.csv",
+  baskontoplan: "Kontoplan_Normal_2020.csv",
 },conf);
+
+
+var skattesatser = {
+  arbetsgivaravgift: 3142,
+  särskildlöneskatt: 2426,
+  bolagsskatt:       2140,
+}
 
 var opts = {
   "-v": "verbose",
@@ -121,6 +128,14 @@ function mul(a,b) {
 function div(a,b) {
   a = a / b;
   return a;
+}
+
+function neg(num) {
+  return -num;
+}
+
+function muldiv(num, mul, div) {
+  return Math.round((num*mul)/div);
 }
 
 function compare(a,b) {
@@ -384,6 +399,14 @@ function transactionSortFunction(a,b) {
     (a.transtext > b.transtext ? 1 : -1);
 }
 
+function trans(kontonr, belopp, transtext) {
+  return Object.assign({
+    kontonr: kontonr,
+    objekt: [],
+    belopp: belopp,
+  }, transtext ? { transtext: transtext } : {});
+}
+
 // check that all transactions are unique, e.g no duplicates
 function validateTransactions(transactions) {
   return transactions.reduce( (a,v,i) => {
@@ -455,71 +478,92 @@ var basKontoplan = {};
 var kontoGrupper = {};
 var kontoKlasser = {};
 
+function basKontotyp(kontonr) {
+  if (kontonr.startsWith("1")) {
+    return 'T';
+  } else if(kontonr.startsWith("2")) {
+    return 'S';
+  } else if(kontonr.startsWith("3")) {
+    return 'I';
+  } else if(kontonr.startsWith("8")) {
+
+  } else {
+    return 'K';
+  }
+
+}
+
 // Urval:     ■ \u25a0
 // Ändring:   |  \u2759"
 function importBaskontoplan(filename) {
   var prevLine = "";
 
-  lineReader(fs.createReadStream(filename, { encoding: 'utf8'}).on('end', () => {
-    console.log("baskontoplan done");
-  })).on('line', (line) => {
-    //console.log("got line: " + line);
+  return new Promise( (resolve, reject) => {
 
-    if( (line.match(/\"/g) || []).length % 2 === 1) {
-      console.log("odd quotes: " + line);
-      prevLine += line + '\n';
-      return;
-    }
+    lineReader(fs.createReadStream(filename, { encoding: 'utf8'}).on('end', () => {
+      console.log("baskontoplan done");
+      //Object.keys(basKontoplan).forEach(k => console.log(basKontoplan[k].kontonr + ": " + basKontoplan[k].kontonamn));
+      return resolve();
+    })).on('line', (line) => {
+      //console.log("got line: " + line);
 
-    if(prevLine.length) {
-      line = prevLine + line;
-      prevLine = "";
-    }
-
-    //var parts = line.split(',').map(p => {
-    //  return p.replace(/"/g, '').trim();
-    //});
-
-
-    var cols = parseCSV2Array(line);
-
-    //console.log("parts: ", cols);
-
-    //if(cols[1] && cols[1].match(/^\d$/)) {
-    //  console.log("kontoklass: " + cols[1] + " : " + cols[2]);
-    //}
-
-    function addBASAccount(kontonr, kontonamn) {
-      basKontoplan[kontonr] = {
-	kontonr: kontonr,
-	kontonamn: kontonamn,
-      };
-    }
-
-    if(cols[1]) {
-      if(cols[1].match(/^\d\d\d\d$/)) {
-	console.log(cols[1] + " : [" + cols[2] + "]");
-	addBASAccount(cols[1], cols[2]);
-      } else if( cols[1].match(/^\d\d$/)) {
-	kontoGrupper[cols[1]] = cols[2];
-	//console.log("kontogrupp: " + cols[1] + " : " + cols[2]);
-      }	else if( cols[1].match(/^\d\d.\d\d/)) {
-	kontoGrupper[cols[1]] = cols[2];
-	//console.log("kontogrupp: " + cols[1] + " : " + cols[2]);
-      } else if(cols[1].match(/^\d$/)) {
-	kontoKlasser[cols[1]] = cols[2];
-	//console.log("kontoklass: " + cols[1] + " : " + cols[2]);
-      } else if(cols[1]) {
-
-	//console.log("LINE: " + line);
-	//console.log("unmatched group: [" + cols[1] + "] : " + cols[2]);
+      if( (line.match(/\"/g) || []).length % 2 === 1) {
+	//console.log("odd quotes: " + line);
+	prevLine += line + '\n';
+	return;
       }
-    }
 
-    if(cols[4] && cols[4].match(/^\d\d\d\d$/)) {
-      console.log(cols[4] + " : [" + cols[5] + "]");
-      addBASAccount(cols[4], cols[5]);
-    }
+      if(prevLine.length) {
+	line = prevLine + line;
+	prevLine = "";
+      }
+
+      //var parts = line.split(',').map(p => {
+      //  return p.replace(/"/g, '').trim();
+      //});
+
+
+      var cols = parseCSV2Array(line);
+
+      //console.log("parts: ", cols);
+
+      //if(cols[1] && cols[1].match(/^\d$/)) {
+      //  console.log("kontoklass: " + cols[1] + " : " + cols[2]);
+      //}
+
+      function addBASAccount(kontonr, kontonamn) {
+	basKontoplan[kontonr] = {
+	  kontonr: kontonr,
+	  kontonamn: kontonamn.replace('\n', ' '),
+	};
+      }
+
+      if(cols[1]) {
+	if(cols[1].match(/^\d\d\d\d$/)) {
+	  //console.log(cols[1] + " : [" + cols[2] + "]");
+	  addBASAccount(cols[1], cols[2]);
+	} else if( cols[1].match(/^\d\d$/)) {
+	  kontoGrupper[cols[1]] = cols[2];
+	  //console.log("kontogrupp: " + cols[1] + " : " + cols[2]);
+	}	else if( cols[1].match(/^\d\d.\d\d/)) {
+	  kontoGrupper[cols[1]] = cols[2];
+	  //console.log("kontogrupp: " + cols[1] + " : " + cols[2]);
+	} else if(cols[1].match(/^\d$/)) {
+	  kontoKlasser[cols[1]] = cols[2];
+	  //console.log("kontoklass: " + cols[1] + " : " + cols[2]);
+	} else if(cols[1]) {
+
+	  //console.log("LINE: " + line);
+	  //console.log("unmatched group: [" + cols[1] + "] : " + cols[2]);
+	}
+      }
+
+      if(cols[4] && cols[4].match(/^\d\d\d\d$/)) {
+	//console.log(cols[4] + " : [" + cols[5] + "]");
+	addBASAccount(cols[4], cols[5]);
+      }
+    });
+
   });
 }
 
@@ -539,9 +583,17 @@ var accounts = {};
 function addAccount(kontonr, kontonamn, kontotyp) {
   var account = {
     kontonr: kontonr,
-    kontonamn: kontonamn || baskonto[kontonr].kontonamn,
-    kontotyp: kontotyp || basKontotyp(kontonr)
+    kontonamn: kontonamn || basKontoplan[kontonr].kontonamn,
+    kontotyp: kontotyp || basKontotyp(kontonr),
+    ib: ZERO,
+    saldo: ZERO,
   };
+
+  if(accounts[kontonr]) {
+    throw ("addAccount failed, " + kontonr + " already exists");
+  }
+
+  accounts[kontonr] = account;
 }
 
 var transactions = [];
@@ -571,6 +623,16 @@ var verifications = [];
 }
 */
 
+function dumpBook() {
+  Object.keys(accounts).map(k => accounts[k]).forEach(a => {
+    console.log("konto " + JSON.stringify(a));
+  });
+
+  verifications.forEach(v => {
+    console.log("ver " + JSON.stringify(v));
+  });
+}
+
 
 function verificationSortFunction(a,b) {
   return  a.verdatum - b.verdatum;
@@ -582,6 +644,7 @@ function validateVerification(ver) {
   }
 
   var sum = atoi("0");
+  //console.log("checksum: ", ver.transactions);
   ver.transactions.forEach(t => { sum = add(sum, t.belopp) });
   if(compare(sum, ZERO) !== 0) {
     console.log("transactions balance mismatch: " + itoa(sum));
@@ -609,7 +672,7 @@ function addVerification(ver) {
   }
 
   // always use current date as regdatum
-  ver.regdatum = Date.now();
+  ver.regdatum = new Date();
 
   ver.serie = verificationSeries;
   ver.vernr = verificationNumber++;
@@ -621,16 +684,15 @@ function addVerification(ver) {
     if(!accounts[t.kontonr]) {
       addAccount(t.kontonr);
     }
+    accounts[t.kontonr].saldo = add(accounts[t.kontonr].saldo, t.belopp);
   });
 
   verifications.push(ver);
   verifications.sort(verificationSortFunction);
 }
 
-
 function matchTransaction(t, reg, kontonr, belopp) {
-  var m = [ (!reg || !!t.transtext.match(reg)) , (!kontonr || t.kontonr === kontonr) , (!belopp || t.belopp === belopp) ];
-
+  //var m = [ (!reg || !!t.transtext.match(reg)) , (!kontonr || t.kontonr === kontonr) , (!belopp || t.belopp === belopp) ];
   //console.log("matcher: ", m, JSON.stringify(t));
 
   return (!reg || t.transtext.match(reg)) && (!kontonr || t.kontonr === kontonr) && (!belopp || t.belopp === belopp);
@@ -638,12 +700,17 @@ function matchTransaction(t, reg, kontonr, belopp) {
 
 ////////////////////////////////////////
 //
-// autobook: Automatically book transactions into verification 
+// autobook: Automatically book transactions into verifications
+
+//function pensionTrans(belopp) {
+//}
 
 function autobook(t) {
   if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000))) {
     console.log("autobook SEB pension" + JSON.stringify(t));
-    add
+    addVerification({ transactions: [ t, trans("7412", neg(t.belopp)),
+				      trans("2514", muldiv(t.belopp, skattesatser.särskildlöneskatt, 10000)),
+				      trans("7533", muldiv(neg(t.belopp), skattesatser.särskildlöneskatt, 10000))]});
   }
 }
 
@@ -714,6 +781,8 @@ var cmds = {
       transactions.forEach(t => {
 	var ver = autobook(t);
       });
+
+      dumpBook();
     });
   },
   ver: function() {
@@ -888,6 +957,9 @@ if(options.repl) {
   startRepl();
 }
 
-cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
+async function run() {
+  await importBaskontoplan(options.baskontoplan);
+  cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
+};
 
-
+run();
