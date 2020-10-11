@@ -80,10 +80,10 @@ JsonLineWriter.prototype._transform = function(obj, enc, callback) {
 }
 
 
-//JsonLineWriter.prototype._writev(objs, callback) {
-//}
-
-
+////////////////////////////////////////
+//
+// Number conversion and arithmetic
+//
 // All numbers are stored as integers in units of 0.01 SEK
 //
 // Maximum representable number is 9'999'999'999'999.00
@@ -182,6 +182,44 @@ function lineReader(rs, ws) {
     input: rs,
     crlfDelay: Infinity
   }, ws ? { output: ws } : {}));
+}
+
+////////////////////////////////////////
+//
+// CSV parsing and imports
+
+function parseCSV2Array(str, options) {
+  return str.split(",").reduce( (a,v,i) => {
+
+    // cases
+    // ,"foo",         => [ ...,"foo",...
+    // ,"foo,bar",     => [ ...,"foo,bar",...
+    // ,"foo,bar,baz", => [ ...,"foo,bar,baz",...
+    // ,"foo,",        => [ ...,"foo,",...
+
+    //console.log("reduce: [" + v + "]");
+
+    if(v.endsWith("\"")) {
+      if(!v.startsWith("\"") || v.length < 2) {
+	// concatenate parts
+
+	do {
+	  v = a.pop() + ',' + v;
+	} while(a.length > 0 && !v.startsWith("\""))
+
+	if(!v.startsWith("\"")) {
+	  console.log(str);
+	  throw("Invalid CSV, unterminated \"");
+	}
+      }
+      // remove double quote
+      v = v.match(/\"([^\"]*)\"/)[1]
+    }
+
+    a.push(v);
+
+    return a;
+  }, []).map(c => c.trim());
 }
 
 function SEBcsv2json(cb) {
@@ -420,40 +458,67 @@ var kontoKlasser = {};
 // Urval:     ■ \u25a0
 // Ändring:   |  \u2759"
 function importBaskontoplan(filename) {
+  var prevLine = "";
+
   lineReader(fs.createReadStream(filename, { encoding: 'utf8'}).on('end', () => {
     console.log("baskontoplan done");
   })).on('line', (line) => {
     //console.log("got line: " + line);
-    var parts = line.split(',').map(p => {
-      return p.replace(/"/g, '').trim();
-    });
-    //console.log("parts: ", parts);
 
-    //if(parts[1] && parts[1].match(/^\d$/)) {
-    //  console.log("kontoklass: " + parts[1] + " : " + parts[2]);
+    if( (line.match(/\"/g) || []).length % 2 === 1) {
+      console.log("odd quotes: " + line);
+      prevLine += line + '\n';
+      return;
+    }
+
+    if(prevLine.length) {
+      line = prevLine + line;
+      prevLine = "";
+    }
+
+    //var parts = line.split(',').map(p => {
+    //  return p.replace(/"/g, '').trim();
+    //});
+
+
+    var cols = parseCSV2Array(line);
+
+    //console.log("parts: ", cols);
+
+    //if(cols[1] && cols[1].match(/^\d$/)) {
+    //  console.log("kontoklass: " + cols[1] + " : " + cols[2]);
     //}
 
-    if(parts[1]) {
-      if(parts[1].match(/^\d\d\d\d$/)) {
-	console.log(parts[1] + " : " + parts[2]);
-	basKontoplan[parts[1]] = {
-	  kontonamn: parts[2],
-	};
-      } else if( parts[1].match(/^\d\d$/)) {
-	kontoGrupper[parts[1]] = parts[2];
-	console.log("kontogrupp: " + parts[1] + " : " + parts[2]);
-      }	else if( parts[1].match(/^\d\d.\d\d/)) {
-	kontoGrupper[parts[1]] = parts[2];
-	console.log("kontogrupp: " + parts[1] + " : " + parts[2]);
-      } else if(parts[1].match(/^\d$/)) {
-	console.log("kontoklass: " + parts[1] + " : " + parts[2]);
-      } else {
-	console.log("unmatched group: [" + parts[1] + "] : " + parts[2]);
+    function addBASAccount(kontonr, kontonamn) {
+      basKontoplan[kontonr] = {
+	kontonr: kontonr,
+	kontonamn: kontonamn,
+      };
+    }
+
+    if(cols[1]) {
+      if(cols[1].match(/^\d\d\d\d$/)) {
+	console.log(cols[1] + " : [" + cols[2] + "]");
+	addBASAccount(cols[1], cols[2]);
+      } else if( cols[1].match(/^\d\d$/)) {
+	kontoGrupper[cols[1]] = cols[2];
+	//console.log("kontogrupp: " + cols[1] + " : " + cols[2]);
+      }	else if( cols[1].match(/^\d\d.\d\d/)) {
+	kontoGrupper[cols[1]] = cols[2];
+	//console.log("kontogrupp: " + cols[1] + " : " + cols[2]);
+      } else if(cols[1].match(/^\d$/)) {
+	kontoKlasser[cols[1]] = cols[2];
+	//console.log("kontoklass: " + cols[1] + " : " + cols[2]);
+      } else if(cols[1]) {
+
+	//console.log("LINE: " + line);
+	//console.log("unmatched group: [" + cols[1] + "] : " + cols[2]);
       }
     }
 
-    if(parts[4] && parts[4].match(/^\d\d\d\d$/)) {
-      console.log(parts[4] + " : " + parts[5]);
+    if(cols[4] && cols[4].match(/^\d\d\d\d$/)) {
+      console.log(cols[4] + " : [" + cols[5] + "]");
+      addBASAccount(cols[4], cols[5]);
     }
   });
 }
@@ -634,6 +699,10 @@ var cmds = {
 
     console.log(yaml.stringify(ver));
 
+  },
+  csv: function(str) {
+    console.log("parse: " + str);
+    console.log("parsed: ", parseCSV2Array(str));
   },
   baskontoplan: function(filename) {
     importBaskontoplan(filename || options.kontoplan);
