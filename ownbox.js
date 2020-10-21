@@ -379,6 +379,10 @@ function setDates() {
   console.log("endDate: " + endDate);
 }
 
+function formatDate(d, separator) {
+  return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
+}
+
 function dateRangeFilter(from, to, field) {
   return function(t) {
     return t[field] >= from && t[field] < to;
@@ -619,7 +623,7 @@ var verifications = [];
   verdatum: "2020-07-01",
   vertext: "Inbetalning faktura 45",
   regdatum: "2020-08-13",
-  transactions: [],
+  trans: [],
 }
 */
 
@@ -682,7 +686,7 @@ function readBook(filename) {
 	  addVerification({
 	    verdatum: new Date(v.datum),
 	    vertext: v.beskrivning + "," + v.id,
-	    transactions: v.trans.map(t => ({
+	    trans: v.trans.map(t => ({
 	      kontonr: t.konto,
 	      belopp: fromNumber(t.belopp)
 	    }))
@@ -700,15 +704,15 @@ function verificationSortFunction(a,b) {
 }
 
 function validateVerification(ver) {
-  if(!ver.transactions || ver.transactions.length === 0) {
+  if(!ver.trans || ver.trans.length === 0) {
     return false;
   }
 
   var sum = atoi("0");
-  //console.log("checksum: ", ver.transactions);
-  ver.transactions.forEach(t => { sum = add(sum, t.belopp) });
+  //console.log("checksum: ", ver.trans);
+  ver.trans.forEach(t => { sum = add(sum, t.belopp) });
   if(compare(sum, ZERO) !== 0) {
-    console.log("transactions balance mismatch: " + itoa(sum));
+    console.log("trans balance mismatch: " + itoa(sum));
     return false;
   }
 
@@ -722,14 +726,17 @@ function addVerification(ver) {
     throw("Invalid verification");
   }
 
-  ver.transactions.forEach(t => {
+  ver.trans.forEach(t => {
     if(t.registred) {
       throw("Transaction already registred in verification: " + t.registred + ", " + JSON.stringify(t));
     }
+
+    // find matching transaction
+    //var findTransaction(t)
   });
 
   if(!ver.verdatum) {
-    ver.verdatum = ver.transactions[0].transdat;
+    ver.verdatum = ver.trans[0].transdat;
   }
 
   // always use current date as regdatum
@@ -740,7 +747,7 @@ function addVerification(ver) {
 
   const verId = ver.serie + ver.vernr;
 
-  ver.transactions.forEach(t => {
+  ver.trans.forEach(t => {
     t.registred = verId;
     if(!accounts[t.kontonr]) {
       addAccount(t.kontonr);
@@ -756,32 +763,28 @@ function readFileUTF8(filename) {
   return fs.promises.readFile(filename, 'utf8');
 }
 
-function importYamlVerification(data, vertext) {
-  var transactions = [];
 
+
+function importVerification(data) {
   var ver = {};
 
-  var o = data.forEach( (v,i) => {
-    //console.log("decode: ", v);
-
-    var key = v.key.value;
-    var value = v.value.value;
-
-
-    if(key.match(/^\d\d\d\d$/)) {
-      //console.log("add transaction: ", key, JSON.stringify(value));
-
-      transactions.push({
-	kontonr: key,
-	belopp: fromNumber(value)
-      });
+  ver.verdatum = data.verdatum || (ver.trans.find(t => !!t.transdat) || {}).transdat || formatDate(new Date());
+  ver.vertext = data.vertex;
+  ver.trans = data.trans.map(t => {
+    var ret = {};
+    if(t.kontonr) {
+      ret.kontonr = t.kontonr;
+      ret.belopp = fromNumber(t.belopp);
     } else {
-      //console.log("add prop: ", key, JSON.stringify(value));
-      ver[key] = value;
+      ret.kontonr = Object.keys(t).find(k => k.match(/\d\d\d\d/));
+      ret.belopp = fromNumber(t[ret.kontonr]);
     }
+    ret.transdat = data.transdat || ver.verdatum;
+    if(data.transtext) {
+      ret.transtext = data.transtext;
+    }
+    return ret;
   });
-
-  ver.transactions = transactions;
 
   addVerification(ver);
 }
@@ -800,7 +803,8 @@ function importYamlVerificationFile(filename) {
     console.log("got YAML data");
     data.forEach(d => {
       //console.log("data: ", d.contents.items);
-      importYamlVerification(d.contents.items);
+      console.log("data: ", d.toJSON());
+      importVerification(d.toJSON());
     });
   });
 }
@@ -823,7 +827,7 @@ function matchTransaction(t, reg, kontonr, belopp) {
 function autobook(t) {
   if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000))) {
     console.log("autobook SEB pension" + JSON.stringify(t));
-    addVerification({ transactions: [ t, trans("7412", neg(t.belopp)),
+    addVerification({ trans: [ t, trans("7412", neg(t.belopp)),
 				      trans("2514", muldiv(t.belopp, skattesatser.särskildlöneskatt, 10000)),
 				      trans("7533", muldiv(neg(t.belopp), skattesatser.särskildlöneskatt, 10000))]});
   }
@@ -877,9 +881,20 @@ var cmds = {
     console.log("itoa: " + itoa(1*num));
   },
   yaml: function() {
-    var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", transactions: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
+    var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
 
     console.log(YAML.stringify(ver));
+
+    var yamlText =
+`foo:
+  - 1
+  - 2
+  - 3`;
+
+    console.log("YAML parse: ", YAML.parse(yamlText));
+    //yaml2Object(YAML.parseAllDocuments(yamlText)[0].contents);
+
+    yaml2Object(YAML.parseAllDocuments(yamlText)[0].toJSON());
 
   },
   csv: function(str) {
@@ -904,7 +919,7 @@ var cmds = {
 
   },
   ver: async function(filename) {
-    var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", transactions: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
+    var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
 
     console.log("validate: " + validateVerification(ver));
 
@@ -920,7 +935,7 @@ vertext: Inbetalning faktura 45
 `);
 
 
-    var ver2 = await importYamlVerificationFile(filename);
+    await importYamlVerificationFile(filename);
 
     dumpBook();
 
