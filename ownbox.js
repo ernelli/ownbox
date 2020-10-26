@@ -30,6 +30,8 @@ var options = Object.assign({
 },conf);
 
 
+//options.grundbok = 
+
 var skattesatser = {
   arbetsgivaravgift: 3142,
   särskildlöneskatt: 2426,
@@ -571,6 +573,7 @@ function importBaskontoplan(filename) {
   });
 }
 
+// huvudboken
 var accounts = {};
 
 /* account
@@ -581,6 +584,8 @@ var accounts = {};
 
   ib: 121000,
   saldo: 9200,  // maps against res or ub during export
+
+  trans: []
 }
 */
 
@@ -591,6 +596,7 @@ function addAccount(kontonr, kontonamn, kontotyp) {
     kontotyp: kontotyp || basKontotyp(kontonr),
     ib: ZERO,
     saldo: ZERO,
+    trans: [],
   };
 
   if(accounts[kontonr]) {
@@ -600,6 +606,7 @@ function addAccount(kontonr, kontonamn, kontotyp) {
   accounts[kontonr] = account;
 }
 
+// imported transactions for autobooking
 var transactions = [];
 /*
 {
@@ -615,6 +622,7 @@ var transactions = [];
 var verificationSeries = 'A';
 var verificationNumber = 1;
 
+// grundboken
 var verifications = [];
 /*
 {
@@ -713,6 +721,7 @@ function validateVerification(ver) {
   ver.trans.forEach(t => { sum = add(sum, t.belopp) });
   if(compare(sum, ZERO) !== 0) {
     console.log("trans balance mismatch: " + itoa(sum));
+    ver.trans.forEach(t => console.log(itoa(t.belopp)));
     return false;
   }
 
@@ -800,10 +809,8 @@ function importYamlVerificationFile(filename) {
 */
     //console.log("got YAML data: ", data);
 
-    console.log("got YAML data");
     data.forEach(d => {
-      //console.log("data: ", d.contents.items);
-      console.log("data: ", d.toJSON());
+      //console.log("data: ", d.toJSON());
       importVerification(d.toJSON());
     });
   });
@@ -830,6 +837,30 @@ function autobook(t) {
     addVerification({ trans: [ t, trans("7412", neg(t.belopp)),
 				      trans("2514", muldiv(t.belopp, skattesatser.särskildlöneskatt, 10000)),
 				      trans("7533", muldiv(neg(t.belopp), skattesatser.särskildlöneskatt, 10000))]});
+  } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11099))) {
+    console.log("autobook Länsförsäkringar pension" + JSON.stringify(t));
+    let pension = fromNumber(10900.46);
+    let forman = fromNumber(198.21);
+    addVerification({ trans: [ t, trans("7412", pension),
+			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
+			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
+			       trans("7389", forman),
+			       trans("2731", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("3740", fromNumber(0.33))
+			     ]});
+  } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11167))) {
+    console.log("autobook Länsförsäkringar pension" + JSON.stringify(t));
+    let pension = fromNumber(10952.58);
+    let forman = fromNumber(214.02);
+    addVerification({ trans: [ t, trans("7412", pension),
+			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
+			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
+			       trans("7389", forman),
+			       trans("2731", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("3740", fromNumber(0.40))
+			     ]});
   }
 }
 
