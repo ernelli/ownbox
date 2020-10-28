@@ -28,7 +28,7 @@ var options = Object.assign({
   transactions: "transactions.json",
   baskontoplan: "Kontoplan_Normal_2020.csv",
   commit: false,
-  importFile: "",
+  infile: "",
 },conf);
 
 
@@ -498,6 +498,15 @@ function addTranscations(transactions, newTransactions) {
   return addedTransactions;
 }
 
+function validateBook() {
+  verifications.forEach(v => {
+    if(!validateVerification(v)) {
+      throw ("invalid book, verification not valid: " + JSON.stringify(v));
+    }
+  });
+
+}
+
 var basKontoplan = {};
 var kontoGrupper = {};
 var kontoKlasser = {};
@@ -667,11 +676,11 @@ function writeBook(filename) {
   var ws = fs.createWriteStream(filename);
 
   Object.keys(accounts).map(k => accounts[k]).forEach(a => {
-    ws.write(JSON.stringify({type: "KONTO", kontonr: a.kontonr, kontonamn: a.kontonamn, ib: a.ib, saldo: a.saldo }) + '\n');
+    ws.write(JSON.stringify({"KONTO": { kontonr: a.kontonr, kontonamn: a.kontonamn, ib: a.ib, saldo: a.saldo } }) + '\n');
   });
 
   verifications.forEach(v => {
-    ws.write(JSON.stringify(Object.assign({type: "VER"},v))+'\n');
+    ws.write(JSON.stringify({ "VER": v })+'\n');
   });
   ws.close();
 }
@@ -706,13 +715,16 @@ function readBook(filename) {
     if(jsonFile) {
       fileData += line + '\n';
     } else if(data) {
-      if(data.type === 'VER') {
-	verifications.push(data);
-      } else if(data.type === 'KONTO') {
+      var type = Object.keys(data)[0];
+      var obj = data[type];
+
+      if(type === 'VER') {
+	verifications.push(obj);
+      } else if(type === 'KONTO') {
 	if(accounts[data.kontonr]) {
-	  return reject("error reading accounting file, " + data.kontonr + " already exits");
+	  return reject("error reading accounting file, " + obj.kontonr + " already exits");
 	}
-	accounts[data.kontonr] = data;
+	accounts[obj.kontonr] = obj;
       }
     }
   });
@@ -747,11 +759,9 @@ function readBook(filename) {
 	  });
 	});
       }
-      //dumpBook();
     }
-
+    validateBook();
     return resolve();
-    
   });
   });
 }
@@ -1069,10 +1079,12 @@ vertext: Inbetalning faktura 45
   },
   writeBook: function (filename) {
     filename = filename || ledgerFilename;
-    
   },
   readBook: function(filename) {
     readBook(filename);
+  },
+  closeBook: function () {
+
   },
   mergetransactions: function(transactionsFile, sebFile, skvFile) {
     safeReadJsonFile(transactionsFile, transactions).then( () => {
@@ -1188,7 +1200,7 @@ if(options.repl) {
 
 async function run() {
   await importBaskontoplan(options.baskontoplan);
-  await readBook(options.importFile || options.acccountingFile);
+  await readBook(options.infile || options.acccountingFile);
   cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
   if(options.commit) {
     writeBook(options.acccountingFile);
