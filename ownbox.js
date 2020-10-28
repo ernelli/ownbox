@@ -27,10 +27,13 @@ var options = Object.assign({
   rar: 0,
   transactions: "transactions.json",
   baskontoplan: "Kontoplan_Normal_2020.csv",
+  commit: false,
+  importFile: "",
 },conf);
 
 
-//options.grundbok = 
+var finansialYearString;
+
 
 var skattesatser = {
   arbetsgivaravgift: 3142,
@@ -354,13 +357,20 @@ const company = (fs.existsSync(confFile + ".yml") && JSON.parse(fs.readFileSync(
 /*
   JSON book entry
 
-  { "label": "KONTO", "kontonr": "1510", "kontonamn":"Kundfodringar", kontotyp: "T", ib: 121000 }
-  { "label": "KONTO", "kontonr": "1930", "kontonamn":"Bankkonto", kontotyp: "T", ib: 453000 }
-  { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1930",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]}}
+  { "type": "KONTO", "kontonr": "1510", "kontonamn":"Kundfodringar", kontotyp: "T", ib: 121000 }
+  { "type": "KONTO", "kontonr": "1930", "kontonamn":"Bankkonto", kontotyp: "T", ib: 453000 }
+  { "type": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1930",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]}}
 
 */
 
+function formatDate(d, separator) {
+  return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
+}
+
+
 console.log("Räkenskapsår: " + options.räkenskapsår);
+
+var ledgerFilename;
 
 var startDate;
 var endDate;
@@ -374,16 +384,24 @@ function setDates() {
 
   var [start,end] = rar.split(" - ").map(d => d.match(/\d\d/g).map(n => 1*n));
 
+  console.log("start-end: ", [start,end]);
+
   startDate = new Date(now.getFullYear(), start[0]-1, start[1]);
-  endDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1]+1);
+  console.log("endDate args: ", now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1] + 1);
+  endDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1] + 1);
+
+  // endDate extends into next day for range queries to work properly
+  // printDate is 0101 - 1231
+  var endPrintDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1]);
 
   console.log("startDate: " + startDate);
   console.log("endDate: " + endDate);
+
+  finansialYearString = formatDate(startDate, ".") + "-" + formatDate(endPrintDate, ".");
+
+  console.log("finansialYearString: " + finansialYearString);
 }
 
-function formatDate(d, separator) {
-  return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
-}
 
 function dateRangeFilter(from, to, field) {
   return function(t) {
@@ -645,8 +663,22 @@ function dumpBook() {
   });
 }
 
+function writeBook(filename) {
+  var ws = fs.createWriteStream(filename);
+
+  Object.keys(accounts).map(k => accounts[k]).forEach(a => {
+    ws.write(JSON.stringify({type: "KONTO", kontonr: a.kontonr, kontonamn: a.kontonamn, ib: a.ib, saldo: a.saldo }) + '\n');
+  });
+
+  verifications.forEach(v => {
+    ws.write(JSON.stringify(Object.assign({type: "VER"},v))+'\n');
+  });
+  ws.close();
+}
 
 function readBook(filename) {
+  return new Promise( (resolve, reject) => {
+
   var firstLine = true;
   var jsonFile = false;
 
@@ -657,6 +689,7 @@ function readBook(filename) {
   lr.on('line', line => {
     var data;
 
+    // detect line delimited JSON or JSON file
     if(firstLine && line.trim().length > 0) {
       try {
 	data = JSON.parse(line);
@@ -666,8 +699,21 @@ function readBook(filename) {
       firstLine = false;
     }
 
+    if(!firstLine && !jsonFile && line.length > 0) {
+      data = JSON.parse(line);
+    }
+
     if(jsonFile) {
       fileData += line + '\n';
+    } else if(data) {
+      if(data.type === 'VER') {
+	verifications.push(data);
+      } else if(data.type === 'KONTO') {
+	if(accounts[data.kontonr]) {
+	  return reject("error reading accounting file, " + data.kontonr + " already exits");
+	}
+	accounts[data.kontonr] = data;
+      }
     }
   });
 
@@ -701,9 +747,12 @@ function readBook(filename) {
 	  });
 	});
       }
-
-      dumpBook();
+      //dumpBook();
     }
+
+    return resolve();
+    
+  });
   });
 }
 
@@ -912,7 +961,7 @@ var cmds = {
     console.log("itoa: " + itoa(1*num));
   },
   yaml: function() {
-    var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
+    var ver = { "type": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
 
     console.log(YAML.stringify(ver));
 
@@ -950,13 +999,13 @@ var cmds = {
 
   },
   ver: async function(filename) {
-    var ver = { "label": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
+    var ver = { "type": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
 
     console.log("validate: " + validateVerification(ver));
 
     var ver1 = YAML.parse(
 `
-label: VER
+type: VER
 serie: A
 vernr: "1"
 verdatum: 2020-07-01
@@ -1017,6 +1066,10 @@ vertext: Inbetalning faktura 45
     var os = new JsonLineWriter();
     lineReader(fs.createReadStream(filename, { encoding: 'latin1'})).on('line', (line) => t(line, os));
     */
+  },
+  writeBook: function (filename) {
+    filename = filename || ledgerFilename;
+    
   },
   readBook: function(filename) {
     readBook(filename);
@@ -1118,6 +1171,10 @@ if(!options.debug) {
 
 setDates();
 
+ledgerFilename = ["accounting", options.orgnummer, finansialYearString, "json"].join('.');
+
+options.acccountingFile = options.acccountingFile || ledgerFilename;
+
 if(verbose) {
   debug("run command: " + ('<' + args[0] + '>' || "<none>") + ", using options: " + JSON.stringify(options, null, 2));
 }
@@ -1131,7 +1188,11 @@ if(options.repl) {
 
 async function run() {
   await importBaskontoplan(options.baskontoplan);
+  await readBook(options.importFile || options.acccountingFile);
   cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
+  if(options.commit) {
+    writeBook(options.acccountingFile);
+  }
 };
 
 run();
