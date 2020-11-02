@@ -25,7 +25,8 @@ var options = Object.assign({
   inform: 'json',
   outform: 'jsonl',
   rar: 0,
-  transactions: "transactions.json",
+  accountingFile: "",
+  transactionsFile: "", //"transactions.json",
   baskontoplan: "Kontoplan_Normal_2020.csv",
   commit: false,
   infile: "",
@@ -370,7 +371,8 @@ function formatDate(d, separator) {
 
 console.log("Räkenskapsår: " + options.räkenskapsår);
 
-var ledgerFilename;
+var ledgerFile;
+var transactionsFile;
 
 var startDate;
 var endDate;
@@ -410,17 +412,21 @@ function dateRangeFilter(from, to, field) {
 }
 
 function isTransactionsEqual(a, b) {
-  return 1*a.transdat === 1*b.transdat &&
+  var res = 1*a.transdat === 1*b.transdat &&
     a.belopp === b.belopp &&
     a.transtext === b.transtext &&
     a.kontonr === b.kontonr;
+
+  //console.log("EQUAL: " + JSON.stringify(a) + ", " + JSON.stringify(b) + " => " + res);
+
+  return res;
 }
 
 function transactionSortFunction(a,b) {
   //console.log("sort test: ", a.transdat, b.transdat);
 
   return a.transdat.getTime() !== b.transdat.getTime() ? a.transdat - b.transdat :
-    (a.transtext > b.transtext ? 1 : -1);
+    (a.transtext === b.transtext ? 0 : (a.transtext > b.transtext ? 1 : -1));
 }
 
 function trans(kontonr, belopp, transtext) {
@@ -436,7 +442,7 @@ function validateTransactions(transactions) {
   return transactions.reduce( (a,v,i) => {
     if(a) {
       if(i > 0) {
-	return !isTransactionsEqual(v, transactions[i-1]) && transactionSortFunction(v, transactions[i-1]) > 0;
+	return !isTransactionsEqual(v, transactions[i-1]) && transactionSortFunction(v, transactions[i-1]) >= 0;
 	/*
 	var p = transactions[i-1];
 	var res =  1*v.transdat !== 1*p.transdat ||
@@ -686,83 +692,91 @@ function writeBook(filename) {
 }
 
 function readBook(filename) {
+  console.log("readBook " + filename);
   return new Promise( (resolve, reject) => {
 
-  var firstLine = true;
-  var jsonFile = false;
+    var firstLine = true;
+    var jsonFile = false;
 
-  var fileData = "";
+    var fileData = "";
 
-  var lr = lineReader(fs.createReadStream(filename));
+    var rs = fs.createReadStream(filename);
 
-  lr.on('line', line => {
-    var data;
+    var lr = lineReader(rs);
 
-    // detect line delimited JSON or JSON file
-    if(firstLine && line.trim().length > 0) {
-      try {
-	data = JSON.parse(line);
-      } catch(e) {
-	jsonFile = true;
-      }
-      firstLine = false;
-    }
+    rs.on('error', err => {
+      //console.log("failed to readBook: ", err);
+      return resolve();
+    });
 
-    if(!firstLine && !jsonFile && line.length > 0) {
-      data = JSON.parse(line);
-    }
+    lr.on('line', line => {
+      var data;
 
-    if(jsonFile) {
-      fileData += line + '\n';
-    } else if(data) {
-      var type = Object.keys(data)[0];
-      var obj = data[type];
-
-      if(type === 'VER') {
-	verifications.push(obj);
-      } else if(type === 'KONTO') {
-	if(accounts[data.kontonr]) {
-	  return reject("error reading accounting file, " + obj.kontonr + " already exits");
+      // detect line delimited JSON or JSON file
+      if(firstLine && line.trim().length > 0) {
+	try {
+	  data = JSON.parse(line);
+	} catch(e) {
+	  jsonFile = true;
 	}
-	accounts[obj.kontonr] = obj;
-      }
-    }
-  });
-
-  lr.on('close', () => {
-    console.log("readbook done");
-
-    if(jsonFile) {
-      var data = JSON.parse(fileData);
-
-      if(data.konton) {
-	Object.keys(data.konton).forEach(k => {
-	  var konto = data.konton[k];
-
-	  accounts[k] = Object.assign({
-	    kontonr: k,
-	    kontonamn: konto.name,
-	    saldo: fromNumber(typeof konto.ib === 'number' ? konto.ib : 0),
-	  }, typeof konto.ib === 'number' ? { ib: fromNumber(konto.ib) } : {});
-	});
+	firstLine = false;
       }
 
-      if(data.verifikationer) {
-	data.verifikationer.forEach(v => {
-	  addVerification({
-	    verdatum: new Date(v.datum),
-	    vertext: v.beskrivning + "," + v.id,
-	    trans: v.trans.map(t => ({
-	      kontonr: t.konto,
-	      belopp: fromNumber(t.belopp)
-	    }))
+      if(!firstLine && !jsonFile && line.length > 0) {
+	data = JSON.parse(line);
+      }
+
+      if(jsonFile) {
+	fileData += line + '\n';
+      } else if(data) {
+	var type = Object.keys(data)[0];
+	var obj = data[type];
+
+	if(type === 'VER') {
+	  verifications.push(obj);
+	} else if(type === 'KONTO') {
+	  if(accounts[data.kontonr]) {
+	    return reject("error reading accounting file, " + obj.kontonr + " already exits");
+	  }
+	  accounts[obj.kontonr] = obj;
+	}
+      }
+    });
+
+    lr.on('close', () => {
+      console.log("readbook done");
+
+      if(jsonFile) {
+	var data = JSON.parse(fileData);
+
+	if(data.konton) {
+	  Object.keys(data.konton).forEach(k => {
+	    var konto = data.konton[k];
+
+	    accounts[k] = Object.assign({
+	      kontonr: k,
+	      kontonamn: konto.name,
+	      saldo: fromNumber(typeof konto.ib === 'number' ? konto.ib : 0),
+	    }, typeof konto.ib === 'number' ? { ib: fromNumber(konto.ib) } : {});
 	  });
-	});
+	}
+
+	if(data.verifikationer) {
+	  data.verifikationer.forEach(v => {
+	    addVerification({
+	      verdatum: new Date(v.datum),
+	      vertext: v.beskrivning + "," + v.id,
+	      trans: v.trans.map(t => ({
+		kontonr: t.konto,
+		belopp: fromNumber(t.belopp)
+	      }))
+	    });
+	  });
+	}
       }
-    }
-    validateBook();
-    return resolve();
-  });
+      validateBook();
+      return resolve();
+    });
   });
 }
 
@@ -995,7 +1009,7 @@ var cmds = {
     importBaskontoplan(filename || options.kontoplan);
   },
   autobook: function() {
-    safeReadJsonFile(options.transactions, transactions).then( () => {
+    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
       console.log("transactions read, num: " + transactions.length);
 
       transactions.forEach(t => {
@@ -1077,8 +1091,53 @@ vertext: Inbetalning faktura 45
     lineReader(fs.createReadStream(filename, { encoding: 'latin1'})).on('line', (line) => t(line, os));
     */
   },
+  mergetrans: function(mergeFile, account) {
+    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
+      //console.log("transactions length: " + transactions.length);
+      return readJsonFile(mergeFile).then( (merge) => {
+	//console.log("seb: " + seb.length);
+	//console.log("skv: " + skv.length);
+
+	var mergedTransactions = merge.map(t => ({
+	  kontonr: account,
+	  belopp: t.belopp,
+	  transdat: new Date(t.bokföringsdatum),
+	  transtext: t.info,
+	})).filter(dateRangeFilter(startDate, endDate, 'transdat')).sort( (a,b) => {
+	  return a.transdat.getTime() !== b.transdat.getTime() ? a.transdat - b.transdat :
+	    (a.transtext > b.transtext ? 1 : -1);
+	});
+
+	if(!validateTransactions(mergedTransactions)) {
+	  console.log("merged transaction has duplicates!!!");
+	  return;
+	}
+
+	//mergedTransactions.forEach(t => console.log(JSON.stringify(t)));
+
+	var addedTransactions = addTranscations(transactions, mergedTransactions);
+	console.log("added %d transactions", addedTransactions.length);
+
+	if(options.commit) {
+	  console.log("write file: " + options.transactionsFile);
+
+	  var ws = fs.createWriteStream(options.transactionsFile);
+	  ws.on('finish', () => {
+	    console.log("all data written");
+	  });
+
+	  transactions.forEach(t => {
+	    //console.log("write t: " + JSON.stringify(t).length);
+	    ws.write(JSON.stringify(t) + '\n');
+	  });
+
+	  ws.end();
+	}
+      });
+    });
+  },
   writeBook: function (filename) {
-    filename = filename || ledgerFilename;
+    filename = filename || ledgerFile;
   },
   readBook: function(filename) {
     readBook(filename);
@@ -1183,12 +1242,16 @@ if(!options.debug) {
 
 setDates();
 
-ledgerFilename = ["accounting", options.orgnummer, finansialYearString, "json"].join('.');
+ledgerFile = ["accounting", options.orgnummer, finansialYearString, "json"].join('.');
+transactionsFile = ["transactions", options.orgnummer, finansialYearString, "json"].join('.');
 
-options.acccountingFile = options.acccountingFile || ledgerFilename;
+options.accountingFile = options.accountingFile || ledgerFile;
+options.transactionsFile = options.transactionsFile || transactionsFile;
+
+console.log("verbose: " + verbose);
 
 if(verbose) {
-  debug("run command: " + ('<' + args[0] + '>' || "<none>") + ", using options: " + JSON.stringify(options, null, 2));
+  console.log("run command: " + ('<' + args[0] + '>' || "<none>") + ", using options: " + JSON.stringify(options, null, 2));
 }
 
 Object.assign(cmds, exports);
@@ -1200,10 +1263,10 @@ if(options.repl) {
 
 async function run() {
   await importBaskontoplan(options.baskontoplan);
-  await readBook(options.infile || options.acccountingFile);
+  await readBook(options.infile || options.accountingFile);
   cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
   if(options.commit) {
-    writeBook(options.acccountingFile);
+    writeBook(options.accountingFile);
   }
 };
 
