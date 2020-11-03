@@ -152,6 +152,15 @@ function fromNumber(n) {
   return Math.round(n*100);
 }
 
+function iszero(num) {
+  // IEEE754 negative 0 compares true to 0
+  if(num === 0) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
 const ZERO = atoi("0");
 
 
@@ -437,6 +446,15 @@ function trans(kontonr, belopp, transtext) {
   }, transtext ? { transtext: transtext } : {});
 }
 
+function motkonto(kontonr) {
+  return {
+    kontonr: kontonr,
+    objekt: [],
+    belopp: 0,
+    transtext: "",
+  };
+}
+
 // check that all transactions are unique, e.g no duplicates
 function validateTransactions(transactions) {
   return transactions.reduce( (a,v,i) => {
@@ -670,11 +688,11 @@ var verifications = [];
 
 function dumpBook() {
   Object.keys(accounts).map(k => accounts[k]).forEach(a => {
-    console.log("konto " + JSON.stringify(a));
+    console.log(JSON.stringify(a));
   });
 
   verifications.forEach(v => {
-    console.log("ver " + JSON.stringify(v));
+    console.log(JSON.stringify(v));
   });
 }
 
@@ -803,9 +821,23 @@ function validateVerification(ver) {
 
 
 function addVerification(ver) {
+  // check if autobalance/motkonto exists
+
+  var motkonto = ver.trans.find(t => iszero(t.belopp));
+  if(motkonto) {
+    var sum = atoi("0");
+    //console.log("checksum: ", ver.trans);
+    ver.trans.forEach(t => { sum = add(sum, t.belopp) });
+    if(iszero(sum)) {
+      // motkonto redundant, remove
+      ver.trans = ver.trans.filter(t => (t !== motkonto) );
+    } else {
+      motkonto.belopp = neg(sum);
+    }
+  }
 
   if(!validateVerification(ver)) {
-    throw("Invalid verification");
+    throw("addVerification failed, Invalid verification");
   }
 
   ver.trans.forEach(t => {
@@ -934,6 +966,8 @@ function autobook(t) {
 			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(0.40))
 			     ]});
+  } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-1000))) {
+    addVerification({ trans: [ t, motkonto("6570")]});
   }
 }
 
@@ -1017,6 +1051,13 @@ var cmds = {
       });
 
       dumpBook();
+
+      transactions.forEach(t => {
+	if(!t.registred) {
+	  console.log("unbooked transaction: " + JSON.stringify(t));
+	}
+      });
+
     });
   },
   book: function() {
