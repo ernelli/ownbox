@@ -40,6 +40,7 @@ var skattesatser = {
   arbetsgivaravgift: 3142,
   särskildlöneskatt: 2426,
   bolagsskatt:       2140,
+  moms:              2500,
 }
 
 var opts = {
@@ -146,6 +147,10 @@ function muldiv(num, mul, div) {
 
 function compare(a,b) {
   return Math.sign(a-b);
+}
+
+function equal(a,b) {
+  return compare(a,b) === 0;
 }
 
 function fromNumber(n) {
@@ -377,6 +382,10 @@ function formatDate(d, separator) {
   return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
 }
 
+function addDays(d, days) {
+  return new Date(d).setDate(d.getDate() + days);
+  return d;
+}
 
 console.log("Räkenskapsår: " + options.räkenskapsår);
 
@@ -730,6 +739,8 @@ function readBook(filename) {
     lr.on('line', line => {
       var data;
 
+      console.log("readBook, LINE: " + line);
+
       // detect line delimited JSON or JSON file
       if(firstLine && line.trim().length > 0) {
 	try {
@@ -747,6 +758,8 @@ function readBook(filename) {
       if(jsonFile) {
 	fileData += line + '\n';
       } else if(data) {
+	console.log("DATA: ", data);
+
 	var type = Object.keys(data)[0];
 	var obj = data[type];
 
@@ -756,6 +769,7 @@ function readBook(filename) {
 	  if(accounts[data.kontonr]) {
 	    return reject("error reading accounting file, " + obj.kontonr + " already exits");
 	  }
+	  console.log("add account: ", obj.kontonr);
 	  accounts[obj.kontonr] = obj;
 	}
       }
@@ -864,6 +878,7 @@ function addVerification(ver) {
   ver.trans.forEach(t => {
     t.registred = verId;
     if(!accounts[t.kontonr]) {
+      //console.log("IN VER ADD ACCOUNT: ", t.kontonr);
       addAccount(t.kontonr);
     }
     accounts[t.kontonr].saldo = add(accounts[t.kontonr].saldo, t.belopp);
@@ -929,6 +944,20 @@ function matchTransaction(t, reg, kontonr, belopp) {
   return (!reg || t.transtext.match(reg)) && (!kontonr || t.kontonr === kontonr) && (!belopp || t.belopp === belopp);
 }
 
+function findTransaction(reg, kontonr, belopp, dateFrom, dateTo) {
+  var res = transactions.filter(t => {
+    if(t.transtext.match(reg)) {
+      //console.log("match t: ", t);
+    }
+    return t.transtext.match(reg) && equal(t.belopp, belopp) && t.transdat >= dateFrom && t.transdat < dateTo;
+  });
+  if(res.length > 1) {
+    return false;
+  } else {
+    return res[0];
+  }
+}
+
 ////////////////////////////////////////
 //
 // autobook: Automatically book transactions into verifications
@@ -966,8 +995,25 @@ function autobook(t) {
 			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(0.40))
 			     ]});
-  } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-1000))) {
+  } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-100))) {
     addVerification({ trans: [ t, motkonto("6570")]});
+  } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
+    addVerification({ trans: [ t, motkonto("2518")]});
+  } else if(matchTransaction(t, /855-4546633/, "1930")) {
+    addVerification({ trans: [ t,
+			       trans("6540", neg(t.belopp)),
+			       trans("4531", neg(t.belopp)),
+			       trans("4599", t.belopp),
+			       trans("2614", muldiv(t.belopp, skattesatser.moms, 10000)),
+			       trans("2645", neg(muldiv(t.belopp, skattesatser.moms, 10000))),
+			     ]});
+  } else if(matchTransaction(t, /Utdelning/, "1930")) {
+    addVerification({ trans: [ t, motkonto("2898")]});
+  } else if(matchTransaction(t, /Skatteverket/, "1930")) {
+    let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, addDays(t.transdat, 3))
+    if(ts) {
+      addVerification({ trans: [ t, ts ]});
+    }
   }
 }
 
@@ -1017,6 +1063,11 @@ var cmds = {
   },
   itoa: function(num) {
     console.log("itoa: " + itoa(1*num));
+  },
+  findtrans: function(text, belopp, from, to) {
+    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
+      console.log("trans: ", findTransaction(new RegExp(text), fromNumber(1*belopp), new Date(from), new Date(to)));
+    });
   },
   yaml: function() {
     var ver = { "type": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
