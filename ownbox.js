@@ -5,7 +5,7 @@
 const readline = require('readline');
 
 const fs = require('fs');
-//const fsp = require('fs/promises');
+const fsp = require('fs').promises;
 const stream = require('stream');
 const { promisify, inherits } = require('util');
 const YAML = require('yaml');
@@ -28,6 +28,7 @@ var options = Object.assign({
   accountingFile: "",
   transactionsFile: "", //"transactions.json",
   baskontoplan: "Kontoplan_Normal_2020.csv",
+  verifications: "verifications",
   commit: false,
   infile: "",
 },conf);
@@ -537,7 +538,6 @@ function validateBook() {
       throw ("invalid book, verification not valid: " + JSON.stringify(v));
     }
   });
-
 }
 
 var basKontoplan = {};
@@ -557,6 +557,15 @@ function basKontotyp(kontonr) {
     return 'K';
   }
 
+}
+
+function isBalanskonto(kontonr) {
+  var typ = basKontotyp(kontonr);
+  if(typ === 'T' || typ === 'S') {
+    return true;
+  } else {
+    return false;
+  }
 }
 
 // Urval:     ■ \u25a0
@@ -635,6 +644,7 @@ function importBaskontoplan(filename) {
 
 // huvudboken
 var accounts = {};
+var accountsList = [];
 
 /* account
 {
@@ -664,6 +674,7 @@ function addAccount(kontonr, kontonamn, kontotyp) {
   }
 
   accounts[kontonr] = account;
+  accountsList.push(account);
 }
 
 // imported transactions for autobooking
@@ -705,14 +716,14 @@ function dumpBook() {
   });
 }
 
-function writeBook(filename) {
+function writeBook(book, filename) {
   var ws = fs.createWriteStream(filename);
 
-  Object.keys(accounts).map(k => accounts[k]).forEach(a => {
+  book.accountsList.forEach(a => {
     ws.write(JSON.stringify({"KONTO": { kontonr: a.kontonr, kontonamn: a.kontonamn, ib: a.ib, saldo: a.saldo } }) + '\n');
   });
 
-  verifications.forEach(v => {
+  book.verifications && book.verifications.forEach(v => {
     ws.write(JSON.stringify({ "VER": v })+'\n');
   });
   ws.close();
@@ -739,7 +750,7 @@ function readBook(filename) {
     lr.on('line', line => {
       var data;
 
-      console.log("readBook, LINE: " + line);
+      //console.log("readBook, LINE: " + line);
 
       // detect line delimited JSON or JSON file
       if(firstLine && line.trim().length > 0) {
@@ -758,7 +769,7 @@ function readBook(filename) {
       if(jsonFile) {
 	fileData += line + '\n';
       } else if(data) {
-	console.log("DATA: ", data);
+	//console.log("DATA: ", data);
 
 	var type = Object.keys(data)[0];
 	var obj = data[type];
@@ -769,8 +780,8 @@ function readBook(filename) {
 	  if(accounts[data.kontonr]) {
 	    return reject("error reading accounting file, " + obj.kontonr + " already exits");
 	  }
-	  console.log("add account: ", obj.kontonr);
 	  accounts[obj.kontonr] = obj;
+	  accountsList.push(obj);
 	}
       }
     });
@@ -790,6 +801,7 @@ function readBook(filename) {
 	      kontonamn: konto.name,
 	      saldo: fromNumber(typeof konto.ib === 'number' ? konto.ib : 0),
 	    }, typeof konto.ib === 'number' ? { ib: fromNumber(konto.ib) } : {});
+	    accountsList.push(accounts[k]);
 	  });
 	}
 
@@ -806,10 +818,28 @@ function readBook(filename) {
 	  });
 	}
       }
+      accountsList.forEach(k => {
+	if(typeof k.ib === 'number' && k.saldo === 0) {
+	  k.saldo = k.ib;
+	}
+      });
       validateBook();
       return resolve();
     });
   });
+}
+
+function transferBook() {
+  var nextYear = accountsList.map(a => Object.assign(
+    {
+      kontonr: a.kontonr,
+      kontonamn: a.kontonamn,
+      kontotyp: a.kontotyp,
+    },
+    isBalanskonto(a.kontonr) ? { ib: a.saldo, saldo: 0 } : { saldo: 0},
+    { trans: [] }
+  ));
+  return nextYear;
 }
 
 function verificationSortFunction(a,b) {
@@ -854,12 +884,18 @@ function addVerification(ver) {
     throw("addVerification failed, Invalid verification");
   }
 
-  ver.trans.forEach(t => {
+  ver.trans = ver.trans.map(t => {
     if(t.registred) {
       throw("Transaction already registred in verification: " + t.registred + ", " + JSON.stringify(t));
     }
 
-    // find matching transaction
+    // find matching transaction in unbooked transactions
+    var mt = findTransaction(t.transtext || ver.vertext, t.kontonr, t.belopp, t.transdat, t.transdat);
+    if(mt) {
+      return mt;
+    } else {
+      return t;
+    }
     //var findTransaction(t)
   });
 
@@ -892,13 +928,14 @@ function readFileUTF8(filename) {
   return fs.promises.readFile(filename, 'utf8');
 }
 
-
-
 function importVerification(data) {
   var ver = {};
 
   ver.verdatum = data.verdatum || (ver.trans.find(t => !!t.transdat) || {}).transdat || formatDate(new Date());
-  ver.vertext = data.vertex;
+  if(typeof ver.verdatum === 'string') {
+    ver.verdatum = new Date(ver.verdatum);
+  }
+  ver.vertext = data.vertext;
   ver.trans = data.trans.map(t => {
     var ret = {};
     if(t.kontonr) {
@@ -916,11 +953,13 @@ function importVerification(data) {
   });
 
   addVerification(ver);
+  return ver;
 }
 
 function importYamlVerificationFile(filename) {
   console.log("read yaml file: " + filename);
-  return readFileUTF8(filename).then( yaml => {
+  var p = readFileUTF8(filename).then( yaml => {
+    console.log("readFileUTF8 done");
     var data = YAML.parseAllDocuments(yaml);
 /*
     , function(holder, key, value) {
@@ -930,12 +969,44 @@ function importYamlVerificationFile(filename) {
     //console.log("got YAML data: ", data);
 
     data.forEach(d => {
-      //console.log("data: ", d.toJSON());
-      importVerification(d.toJSON());
+      console.log("data: ", d.toJSON());
+      let ver = importVerification(d.toJSON());
+      console.log("imported verification: " + JSON.stringify(ver, null, 2));
     });
+    console.log("all verifications imported");
   });
+
+  console.log("got p: ", p);
+  return p;
 }
 
+
+async function importVerifications() {
+  console.log("importVerifications called");
+
+  return new Promise( async (resolve,reject) => {
+    var files = await fsp.readdir(options.verifications);
+
+//    fs.readdir(options.verifications, (err, files) => {
+      console.log("importVerifications got files: ", files);
+    for (const f of files) {
+  //await files.forEach( async f => {
+    console.log("import verification file: " + f);
+    //var data = await fsp.readFile([options.verifications,f].join('/'));
+    //console.log("got file data: ", data.toString('utf8'));
+    await importYamlVerificationFile([options.verifications,f].join('/'));
+    console.log("importVerifications, yaml file imported");
+    }
+
+//  });
+
+    console.log("importVerifications done");
+
+    return resolve('ver import done');
+//    });
+  });
+
+}
 
 function matchTransaction(t, reg, kontonr, belopp) {
   //var m = [ (!reg || !!t.transtext.match(reg)) , (!kontonr || t.kontonr === kontonr) , (!belopp || t.belopp === belopp) ];
@@ -945,16 +1016,39 @@ function matchTransaction(t, reg, kontonr, belopp) {
 }
 
 function findTransaction(reg, kontonr, belopp, dateFrom, dateTo) {
+  if(reg && kontonr && belopp && dateFrom && dateTo) {
+
+  var match = (typeof reg === 'string') ?
+      function strmatcher(str) { return str === reg } :
+      function regmatcher(str) { return str.match(reg) };
+
+
+  //console.log("findTransaction: ", reg, kontonr, belopp, dateFrom, dateTo);
+  //console.log("findTransaction, matcher: " + match.name);
+
   var res = transactions.filter(t => {
-    if(t.transtext.match(reg)) {
-      //console.log("match t: ", t);
+    /*
+    try {
+      if(t.transtext && match(t.transtext)) {
+	console.log("findTransaction match t: ", t);
+      } else {
+	console.log("findTransaction NO match t: ", reg, t.transtext);
+      }
+    } catch(e) {
+      console.log("testing matcher failed");
+      process.exit(0);
     }
-    return t.transtext.match(reg) && equal(t.belopp, belopp) && t.transdat >= dateFrom && t.transdat < dateTo;
+    */
+    return t.transtext && match(t.transtext) && equal(t.belopp, belopp) && t.transdat >= dateFrom && t.transdat <= dateTo;
   });
   if(res.length > 1) {
+    console.log("res matched: ", res);
     return false;
   } else {
     return res[0];
+  }
+  } else {
+    return false;
   }
 }
 
@@ -967,12 +1061,12 @@ function findTransaction(reg, kontonr, belopp, dateFrom, dateTo) {
 
 function autobook(t) {
   if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000))) {
-    console.log("autobook SEB pension" + JSON.stringify(t));
+    //console.log("autobook SEB pension" + JSON.stringify(t));
     addVerification({ trans: [ t, trans("7412", neg(t.belopp)),
 				      trans("2514", muldiv(t.belopp, skattesatser.särskildlöneskatt, 10000)),
 				      trans("7533", muldiv(neg(t.belopp), skattesatser.särskildlöneskatt, 10000))]});
   } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11099))) {
-    console.log("autobook Länsförsäkringar pension" + JSON.stringify(t));
+    //console.log("autobook Länsförsäkringar pension" + JSON.stringify(t));
     let pension = fromNumber(10900.46);
     let forman = fromNumber(198.21);
     addVerification({ trans: [ t, trans("7412", pension),
@@ -1012,6 +1106,7 @@ function autobook(t) {
   } else if(matchTransaction(t, /Skatteverket/, "1930")) {
     let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, addDays(t.transdat, 3))
     if(ts) {
+      console.log("found matching transation: " + JSON.stringify(ts));
       addVerification({ trans: [ t, ts ]});
     }
   }
@@ -1094,7 +1189,8 @@ var cmds = {
     importBaskontoplan(filename || options.kontoplan);
   },
   autobook: function() {
-    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
+    console.log("RUN autobook");
+//    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
       console.log("transactions read, num: " + transactions.length);
 
       transactions.forEach(t => {
@@ -1109,11 +1205,17 @@ var cmds = {
 	}
       });
 
-    });
+//    });
   },
   book: function() {
 
   },
+  verifications: async function () {
+    await importVerifications();
+    console.log("verifications imported");
+    dumpBook();
+  },
+
   ver: async function(filename) {
     var ver = { "type": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
 
@@ -1234,8 +1336,14 @@ vertext: Inbetalning faktura 45
   readBook: function(filename) {
     readBook(filename);
   },
-  closeBook: function () {
+  transferBook: function (filename) {
+    var nextYear = transferBook();
 
+    if(filename) {
+      writeBook( { accountsList: nextYear }, filename);
+    } else if(options.commit) {
+      // commit into default accounting file
+    }
   },
   mergetransactions: function(transactionsFile, sebFile, skvFile) {
     safeReadJsonFile(transactionsFile, transactions).then( () => {
@@ -1356,9 +1464,14 @@ if(options.repl) {
 async function run() {
   await importBaskontoplan(options.baskontoplan);
   await readBook(options.infile || options.accountingFile);
+  await safeReadJsonFile(options.transactionsFile, transactions);
+  console.log("running importVerifications, transactions: " + transactions.length);
+  let verStat = await importVerifications();
+  console.log("accounting init done, run command: " + verStat);
+
   cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
   if(options.commit) {
-    writeBook(options.accountingFile);
+    writeBook({ accountsList: accountsList, verifications: verifications }, options.accountingFile);
   }
 };
 
