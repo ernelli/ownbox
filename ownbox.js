@@ -29,6 +29,7 @@ var options = Object.assign({
   transactionsFile: "", //"transactions.json",
   baskontoplan: "Kontoplan_Normal_2020.csv",
   verifications: "verifications",
+  autobook: true,
   commit: false,
   infile: "",
 },conf);
@@ -57,6 +58,10 @@ Object.keys(options).forEach(k => { opts['--' + dasher(k)] = k; });
 
 var debug = function debug() {
   console.log.apply(this, arguments);
+}
+
+function json(o) {
+  return JSON.stringify(o);
 }
 
 
@@ -169,6 +174,9 @@ function iszero(num) {
 
 const ZERO = atoi("0");
 
+function zero() {
+  return atoi("0")
+}
 
 function atoi(str, decimal) {
   var parts, integer, frac;
@@ -379,6 +387,18 @@ const company = (fs.existsSync(confFile + ".yml") && JSON.parse(fs.readFileSync(
 
 */
 
+function printTable(arr) {
+  var header = Object.keys(arr[0]);
+  var widths = header.map(h => 1+h.length);
+  arr.forEach(r => {
+    header.forEach( (k,i) => { widths[i] = (widths[i] < r[k].length) ? r[k].length : widths[i]; });
+  });
+  var pad = new Array(widths.reduce( (a, v) => (v > a ? v : a), 0)).fill(' ').join('');
+  console.log("widths: ", widths, "pad: ", pad.length);
+  console.log(header.map( (h,i) => (h + pad).slice(0, widths[i])).join(','));
+  arr.forEach(r => console.log(header.map( (k,i) => (r[k] + pad).slice(0, widths[i])).join(',')));
+}
+
 function formatDate(d, separator) {
   return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
 }
@@ -530,6 +550,30 @@ function addTranscations(transactions, newTransactions) {
   }
 
   return addedTransactions;
+}
+
+// 1, 2, 3, 4 => (Q1, Q2, Q3, Q4)
+function getTransactionsPeriod(transactions, period) {
+  if(typeof transactions === 'string') {
+    transactions = accounts[transactions].trans;
+  }
+
+  period = period - 1;
+  return transactions.filter(t => ((t.transdat.getMonth() / 3 | 0) === period) );
+}
+
+function sumTransactions(trans) {
+  var sum = atoi("0");
+  trans.forEach(t => { sum = add(sum, t.belopp); });
+  return sum;
+}
+
+function sumPeriod(account, period) {
+  console.log("sumPeriod: " + account);
+  var trans = getTransactionsPeriod(account, period);
+  var sum = atoi("0");
+  trans.forEach(t => { sum = add(sum, t.belopp); });
+  return sum;
 }
 
 function validateBook() {
@@ -727,6 +771,9 @@ function writeBook(book, filename) {
     ws.write(JSON.stringify({ "VER": v })+'\n');
   });
   ws.close();
+
+  return ws;
+
 }
 
 function readBook(filename) {
@@ -822,6 +869,9 @@ function readBook(filename) {
 	if(typeof k.ib === 'number' && k.saldo === 0) {
 	  k.saldo = k.ib;
 	}
+	if(!k.trans) {
+	  k.trans = [];
+	}
       });
       validateBook();
       return resolve();
@@ -900,7 +950,7 @@ function addVerification(ver) {
   });
 
   if(!ver.verdatum) {
-    ver.verdatum = ver.trans[0].transdat;
+    ver.verdatum = ver.trans[0].transdat || (new Date());
   }
 
   // always use current date as regdatum
@@ -914,10 +964,13 @@ function addVerification(ver) {
   ver.trans.forEach(t => {
     t.registred = verId;
     if(!accounts[t.kontonr]) {
-      //console.log("IN VER ADD ACCOUNT: ", t.kontonr);
       addAccount(t.kontonr);
     }
+    if(!t.transdat) {
+      t.transdat = ver.verdatum;
+    }
     accounts[t.kontonr].saldo = add(accounts[t.kontonr].saldo, t.belopp);
+    accounts[t.kontonr].trans.push(t);
   });
 
   verifications.push(ver);
@@ -990,12 +1043,11 @@ async function importVerifications() {
 //    fs.readdir(options.verifications, (err, files) => {
       console.log("importVerifications got files: ", files);
     for (const f of files) {
-  //await files.forEach( async f => {
-    console.log("import verification file: " + f);
-    //var data = await fsp.readFile([options.verifications,f].join('/'));
-    //console.log("got file data: ", data.toString('utf8'));
-    await importYamlVerificationFile([options.verifications,f].join('/'));
-    console.log("importVerifications, yaml file imported");
+      if(f.endsWith(".yaml")) {
+	console.log("import verification file: " + f);
+	await importYamlVerificationFile([options.verifications,f].join('/'));
+	console.log("importVerifications, yaml file imported");
+      }
     }
 
 //  });
@@ -1078,7 +1130,7 @@ function autobook(t) {
 			       trans("3740", fromNumber(0.33))
 			     ]});
   } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11167))) {
-    console.log("autobook Länsförsäkringar pension" + JSON.stringify(t));
+    //console.log("autobook Länsförsäkringar pension" + JSON.stringify(t));
     let pension = fromNumber(10952.58);
     let forman = fromNumber(214.02);
     addVerification({ trans: [ t, trans("7412", pension),
@@ -1206,6 +1258,71 @@ var cmds = {
       });
 
 //    });
+  },
+  trans: function(kontonr) {
+    accounts[kontonr].trans.forEach(t => console.log(json(t)));
+  },
+
+  sum: function(kontonr) {
+    console.log(kontonr);
+    console.log("-------");
+    accounts[kontonr] && accounts[kontonr].trans.forEach(t => console.log(itoa(t.belopp)));
+    console.log("-------");
+    console.log(itoa(sumTransactions(accounts[kontonr].trans)));
+  },
+  arbetsgivaravgifter: function(month) {
+    
+
+  },
+  moms: function(period) {
+    console.log("momsrapport för period " + period);
+    console.log("account 3001 " + JSON.stringify(accounts["3001"], null, 2));
+    var momsRapport = [
+      [ "3001", "5" , -1], // I-Försäljning 25%
+      [ "2610", "10", -1], // S-Utgående Moms 25%
+      [ "4515", "20",  1], // K+Inköp varor EU 25 %
+      [ "4531", "22",  1], // K+Tjänst. Utanf. EU  25 %
+      [ "2614", "30", -1], // S-Utgåend moms Omv skatt 25%
+      [ "4545", "50",  1], // K+Import varor 25%
+      [ "2615", "60", -1], // S-Utgående moms varuimport 25 %
+      [ "2640", "0",    1],   // S+Ingående Moms
+      [ "2645", "0",    1]];  // S+Ingående moms Utland
+
+    var rapport = momsRapport.map(m => ({
+      fältnamn: accounts[m[0]].kontonamn.replace("\n"," "),
+      fältkod: m[1],
+      belopp: sumPeriod(m[0], period)
+    }));
+
+    rapport.filter(r => r.fältkod === "0").forEach(i => console.log("ing: ", i));
+
+    var ingMoms = rapport.filter(r => r.fältkod === "0").reduce( (a,v) => add(a, v.belopp), zero());
+
+    console.log("ingående moms: " + ingMoms);
+
+    rapport.push({
+      fältnamn: "Ingående moms totalt",
+      fältkod: "48",
+      belopp: ingMoms
+    });
+
+    var resMap = rapport.reduce( (a,v) => (a[v.fältkod] = v, a), {});
+
+    rapport.push({
+      fältnamn: "Moms att betala",
+      fältkod: "49",
+      belopp: neg(add(resMap["48"].belopp,  add(resMap["10"].belopp, add(resMap["30"].belopp, resMap["60"].belopp))))
+    });
+
+    //momsRapport.forEach(r => console.log(r[0] + " " + basKontotyp(r[0])));
+
+    //rapport.forEach( (r,i) => (r.belopp = itoa(mul(r.belopp, fromNumber( (momsRapport[i] && momsRapport[i][2]) || 1)))));
+    rapport.forEach( (r,i) => (r.belopp = itoa( (momsRapport[i] && momsRapport[i][2]) < 0 ? neg(r.belopp ): r.belopp)));
+
+    //console.log("fältnamn, fältkod, belopp");
+    //rapport.forEach(f => console.log(f.fältnamn, f.fältkod, itoa(f.belopp)));
+    printTable(rapport);
+
   },
   book: function() {
 
@@ -1468,11 +1585,23 @@ async function run() {
   console.log("running importVerifications, transactions: " + transactions.length);
   let verStat = await importVerifications();
   console.log("accounting init done, run command: " + verStat);
+  if(options.autobook) {
+    transactions.forEach(t => {
+      var ver = autobook(t);
+    });
+  }
 
   cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
   if(options.commit) {
-    writeBook({ accountsList: accountsList, verifications: verifications }, options.accountingFile);
+    await writeBook({ accountsList: accountsList, verifications: verifications }, options.accountingFile);
   }
+
+  transactions.forEach(t => {
+    if(!t.registred) {
+	  console.log("unbooked transaction: " + JSON.stringify(t));
+    }
+  });
+
 };
 
 run();
