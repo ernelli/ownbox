@@ -29,7 +29,7 @@ var options = Object.assign({
   transactionsFile: "", //"transactions.json",
   baskontoplan: "Kontoplan_Normal_2020.csv",
   verifications: "verifications",
-  autobook: true,
+  autobook: false,
   commit: false,
   infile: "",
 },conf);
@@ -485,12 +485,33 @@ function motkonto(kontonr) {
   };
 }
 
-// check that all transactions are unique, e.g no duplicates
+// check that all transactions are unique, e.g no duplicates and in order
 function validateTransactions(transactions) {
+
+/*
+  console.log("validateTransactions");
+  transactions.forEach(t => {
+    console.log(t.transdat, t.kontonr, t.transtext);
+  });
+*/
   return transactions.reduce( (a,v,i) => {
+    //console.log("reduce: ", v.transdat, v.transtext);
     if(a) {
       if(i > 0) {
-	return !isTransactionsEqual(v, transactions[i-1]) && transactionSortFunction(v, transactions[i-1]) >= 0;
+	//return !isTransactionsEqual(v, transactions[i-1]) && transactionSortFunction(v, transactions[i-1]) >= 0;
+
+	if(isTransactionsEqual(v, transactions[i-1])) {
+	  console.log("duplicate transactions: ", v, transactions[i-1]);
+	  return false;
+	}
+
+	if(transactionSortFunction(v, transactions[i-1]) < 0) {
+	  console.log("transactions out of order: ", v, transactions[i-1]);
+	  return false;
+	}
+
+	return true;
+
 	/*
 	var p = transactions[i-1];
 	var res =  1*v.transdat !== 1*p.transdat ||
@@ -513,6 +534,15 @@ function addTranscations(transactions, newTransactions) {
   var addedTransactions = [];
 
   var ti = 0, ni = 0;
+
+  if(!validateTransactions(transactions)) {
+    throw("transactions invalid before add");
+  }
+
+  if(!validateTransactions(newTransactions)) {
+    throw("newTransactions invalid before add");
+  }
+
 
   //console.log("add %d transactions to transacations: %d", newTransactions.length ,transactions.length);
 
@@ -1010,9 +1040,9 @@ function importVerification(data) {
 }
 
 function importYamlVerificationFile(filename) {
-  console.log("read yaml file: " + filename);
+  debug("read yaml file: " + filename);
   var p = readFileUTF8(filename).then( yaml => {
-    console.log("readFileUTF8 done");
+    debug("readFileUTF8 done");
     var data = YAML.parseAllDocuments(yaml);
 /*
     , function(holder, key, value) {
@@ -1022,14 +1052,13 @@ function importYamlVerificationFile(filename) {
     //console.log("got YAML data: ", data);
 
     data.forEach(d => {
-      console.log("data: ", d.toJSON());
+      debug("data: ", d.toJSON());
       let ver = importVerification(d.toJSON());
-      console.log("imported verification: " + JSON.stringify(ver, null, 2));
+      debug("imported verification: " + JSON.stringify(ver, null, 2));
     });
-    console.log("all verifications imported");
+    debug("all verifications imported");
   });
 
-  console.log("got p: ", p);
   return p;
 }
 
@@ -1041,12 +1070,12 @@ async function importVerifications() {
     var files = await fsp.readdir(options.verifications);
 
 //    fs.readdir(options.verifications, (err, files) => {
-      console.log("importVerifications got files: ", files);
+      debug("importVerifications got files: ", files);
     for (const f of files) {
-      if(f.endsWith(".yaml")) {
-	console.log("import verification file: " + f);
+      if(!f.startsWith('.#') && f.endsWith(".yaml")) {
+	debug("import verification file: " + f);
 	await importYamlVerificationFile([options.verifications,f].join('/'));
-	console.log("importVerifications, yaml file imported");
+	debug("importVerifications, yaml file imported");
       }
     }
 
@@ -1054,7 +1083,7 @@ async function importVerifications() {
 
     console.log("importVerifications done");
 
-    return resolve('ver import done');
+    return resolve();
 //    });
   });
 
@@ -1271,7 +1300,7 @@ var cmds = {
     console.log(itoa(sumTransactions(accounts[kontonr].trans)));
   },
   arbetsgivaravgifter: function(month) {
-    
+
 
   },
   moms: function(period) {
@@ -1403,7 +1432,9 @@ vertext: Inbetalning faktura 45
     */
   },
   mergetrans: function(mergeFile, account) {
-    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
+//    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
+
+
       //console.log("transactions length: " + transactions.length);
       return readJsonFile(mergeFile).then( (merge) => {
 	//console.log("seb: " + seb.length);
@@ -1445,7 +1476,7 @@ vertext: Inbetalning faktura 45
 	  ws.end();
 	}
       });
-    });
+//    });
   },
   writeBook: function (filename) {
     filename = filename || ledgerFile;
@@ -1463,8 +1494,9 @@ vertext: Inbetalning faktura 45
     }
   },
   mergetransactions: function(transactionsFile, sebFile, skvFile) {
+    console.log("mergetransactions: read %s", transactionsFile);
     safeReadJsonFile(transactionsFile, transactions).then( () => {
-      //console.log("transactions length: " + transactions.length);
+      console.log("transactions length: " + transactions.length);
       return Promise.all([readJsonFile(sebFile), readJsonFile(skvFile)]).then( ([seb, skv]) => {
 	//console.log("seb: " + seb.length);
 	//console.log("skv: " + skv.length);
@@ -1485,6 +1517,8 @@ vertext: Inbetalning faktura 45
 	    (a.transtext > b.transtext ? 1 : -1);
 	});
 
+	console.log("validate merged transactions");
+
 	if(!validateTransactions(mergedTransactions)) {
 	  console.log("merged transaction has duplicates!!!");
 	  return;
@@ -1492,8 +1526,16 @@ vertext: Inbetalning faktura 45
 
 	//mergedTransactions.forEach(t => console.log(JSON.stringify(t)));
 
-	var addedTransactions = addTranscations(transactions, mergedTransactions);
-	console.log("added %d transactions", addedTransactions.length);
+	console.log("add transactions");
+	try {
+	  var addedTransactions = addTranscations(transactions, mergedTransactions);
+	  console.log("added %d transactions", addedTransactions.length);
+	} catch(e) {
+	  if(e) {
+	    console.log("Failed to add transactions:", e);
+	    return;
+	  }
+	}
 
 	//console.log("write file: " + transactionsFile);
 
@@ -1584,24 +1626,36 @@ async function run() {
   await safeReadJsonFile(options.transactionsFile, transactions);
   console.log("running importVerifications, transactions: " + transactions.length);
   let verStat = await importVerifications();
-  console.log("accounting init done, run command: " + verStat);
+  console.log("verifications imported");
   if(options.autobook) {
+  console.log("run autobook");
     transactions.forEach(t => {
       var ver = autobook(t);
     });
   }
-
+  console.log("accounting init done, run command");
   cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
   if(options.commit) {
     await writeBook({ accountsList: accountsList, verifications: verifications }, options.accountingFile);
   }
+
+  console.log("alldone, dump unbooked transactions");
 
   transactions.forEach(t => {
     if(!t.registred) {
 	  console.log("unbooked transaction: " + JSON.stringify(t));
     }
   });
-
+  console.log("alldone, exit");
 };
 
-run();
+
+try {
+  run().then(res => {
+
+  }).catch(err => {
+    console.log("execution failed: ", err);
+  });
+} catch(e) {
+  console.log("execution failed: ", e);
+}
