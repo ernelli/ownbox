@@ -22,6 +22,7 @@ var conf = (fs.existsSync(confFile) && JSON.parse(fs.readFileSync(confFile))) ||
 var options = Object.assign({
   verbose: false,
   interactive: false,
+  debug: false,
   inform: 'json',
   outform: 'jsonl',
   rar: 0,
@@ -29,7 +30,8 @@ var options = Object.assign({
   transactionsFile: "", //"transactions.json",
   baskontoplan: "Kontoplan_Normal_2020.csv",
   verifications: "verifications",
-  autobook: false,
+  autobook: true,
+  noAutobook: false,
   commit: false,
   infile: "",
 },conf);
@@ -394,7 +396,7 @@ function printTable(arr) {
     header.forEach( (k,i) => { widths[i] = (widths[i] < r[k].length) ? r[k].length : widths[i]; });
   });
   var pad = new Array(widths.reduce( (a, v) => (v > a ? v : a), 0)).fill(' ').join('');
-  console.log("widths: ", widths, "pad: ", pad.length);
+  //console.log("widths: ", widths, "pad: ", pad.length);
   console.log(header.map( (h,i) => (h + pad).slice(0, widths[i])).join(','));
   arr.forEach(r => console.log(header.map( (k,i) => (r[k] + pad).slice(0, widths[i])).join(',')));
 }
@@ -442,7 +444,6 @@ function setDates() {
 
   console.log("finansialYearString: " + finansialYearString);
 }
-
 
 function dateRangeFilter(from, to, field) {
   return function(t) {
@@ -606,6 +607,14 @@ function sumPeriod(account, period) {
   return sum;
 }
 
+function sumMonth(account, month) {
+  console.log("sumPeriod: " + account);
+  var trans = getTransactionsMonth(account, period);
+  var sum = atoi("0");
+  trans.forEach(t => { sum = add(sum, t.belopp); });
+  return sum;
+}
+
 function validateBook() {
   verifications.forEach(v => {
     if(!validateVerification(v)) {
@@ -683,7 +692,7 @@ function importBaskontoplan(filename) {
       function addBASAccount(kontonr, kontonamn) {
 	basKontoplan[kontonr] = {
 	  kontonr: kontonr,
-	  kontonamn: kontonamn.replace('\n', ' '),
+	  kontonamn: kontonamn.replace(/\n/g, ' '),
 	};
       }
 
@@ -857,8 +866,13 @@ function readBook(filename) {
 	  if(accounts[data.kontonr]) {
 	    return reject("error reading accounting file, " + obj.kontonr + " already exits");
 	  }
+	  obj.kontonamn = obj.kontonamn.replace(/\n/g, ' ');
 	  accounts[obj.kontonr] = obj;
 	  accountsList.push(obj);
+
+	  if(obj.kontonr === '1730') {
+	    console.log("inside readbook konto: " + JSON.stringify(obj));
+	  }
 	}
       }
     });
@@ -894,19 +908,24 @@ function readBook(filename) {
 	    });
 	  });
 	}
+	accountsList.forEach(k => {
+	  if(typeof k.ub === 'number' && k.saldo === 0) {
+	    k.saldo = k.ib;
+	  }
+	  if(!k.trans) {
+	    k.trans = [];
+	  }
+	});
       }
-      accountsList.forEach(k => {
-	if(typeof k.ib === 'number' && k.saldo === 0) {
-	  k.saldo = k.ib;
-	}
-	if(!k.trans) {
-	  k.trans = [];
-	}
-      });
+
       validateBook();
       return resolve();
     });
   });
+}
+
+function readTransactions(filename) {
+
 }
 
 function transferBook() {
@@ -1018,6 +1037,7 @@ function importVerification(data) {
   if(typeof ver.verdatum === 'string') {
     ver.verdatum = new Date(ver.verdatum);
   }
+
   ver.vertext = data.vertext;
   ver.trans = data.trans.map(t => {
     var ret = {};
@@ -1035,7 +1055,9 @@ function importVerification(data) {
     return ret;
   });
 
-  addVerification(ver);
+  if(ver.verdatum >= startDate && ver.verdatum <= endDate) {
+    addVerification(ver);
+  }
   return ver;
 }
 
@@ -1353,6 +1375,42 @@ var cmds = {
     printTable(rapport);
 
   },
+  balans: function () {
+    console.log("Tillgångar:");
+    var sum = zero();
+
+    var rapport = [];
+
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
+
+      if(k.kontonr === '1730') {
+	console.log("balans konto: " + JSON.stringify(k));
+      }
+
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
+      sum = add(sum, k.saldo);
+    });
+    printTable(rapport);
+    console.log("\ntillgångar");
+    console.log("------------------------------------------");
+    console.log("summa: " + itoa(sum));
+
+    rapport = [];
+
+    sum = 0;
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
+      sum = add(sum, k.saldo);
+    });
+    console.log("\nskulder");
+    printTable(rapport);
+    console.log("------------------------------------------");
+    console.log("summa: " + itoa(sum));
+
+  },
+  validate: function() {
+
+  },
   book: function() {
 
   },
@@ -1613,6 +1671,10 @@ if(verbose) {
   console.log("run command: " + ('<' + args[0] + '>' || "<none>") + ", using options: " + JSON.stringify(options, null, 2));
 }
 
+if(options.noAutobook) {
+  options.autobook = false;
+}
+
 Object.assign(cmds, exports);
 
 // Remote access print eval loop
@@ -1623,17 +1685,28 @@ if(options.repl) {
 async function run() {
   await importBaskontoplan(options.baskontoplan);
   await readBook(options.infile || options.accountingFile);
+  console.log("readBook: " + JSON.stringify(accounts['1730']));
   await safeReadJsonFile(options.transactionsFile, transactions);
+  console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
   console.log("running importVerifications, transactions: " + transactions.length);
   let verStat = await importVerifications();
   console.log("verifications imported");
+  console.log("check account: " + JSON.stringify(accounts['1730']));
   if(options.autobook) {
-  console.log("run autobook");
+    console.log("run autobook");
     transactions.forEach(t => {
-      var ver = autobook(t);
+      if(!t.registred) {
+	var ver = autobook(t);
+	if(ver) {
+	  console.log("autobooked: ", ver);
+	}
+      }
     });
+    console.log("autobook done");
   }
   console.log("accounting init done, run command");
+
+
   cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
   if(options.commit) {
     await writeBook({ accountsList: accountsList, verifications: verifications }, options.accountingFile);
@@ -1641,11 +1714,13 @@ async function run() {
 
   console.log("alldone, dump unbooked transactions");
 
-  transactions.forEach(t => {
-    if(!t.registred) {
-	  console.log("unbooked transaction: " + JSON.stringify(t));
-    }
-  });
+  if(options.autobook) {
+    transactions.forEach(t => {
+      if(!t.registred) {
+	console.log("unbooked transaction: " + JSON.stringify(t));
+      }
+    });
+  }
   console.log("alldone, exit");
 };
 
