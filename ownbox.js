@@ -401,6 +401,18 @@ function printTable(arr) {
   arr.forEach(r => console.log(header.map( (k,i) => (r[k] + pad).slice(0, widths[i])).join(',')));
 }
 
+function convertDate(d) {
+  if(typeof d === 'string') {
+    return new Date(d);
+  } else if(d instanceof Date) {
+    return d;
+  } else if(typeof d === 'number') {
+    return new Date(d);
+  } else {
+    throw "Cannot convert ", d, " to Date";
+  }
+}
+
 function formatDate(d, separator) {
   return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
 }
@@ -623,6 +635,24 @@ function validateBook() {
   });
 }
 
+function sortVerifications() {
+  verifications.sort( (a,b) => {
+    if(a.verdatum > b.verdatum) {
+      return 1;
+    } else if(a.verdatum < b.verdatum) {
+      return -1;
+    } else {
+      return (a.serie+a.vernr) > (b.serie+b.vernr) ? 1 : -1;
+    }
+  });
+}
+
+function sortTransactions() {
+  accountsList.forEach(a => {
+    a.trans.sort(transactionSortFunction);
+  });
+}
+
 var basKontoplan = {};
 var kontoGrupper = {};
 var kontoKlasser = {};
@@ -778,6 +808,8 @@ var verificationNumber = 1;
 
 // grundboken
 var verifications = [];
+var verificationsIndex = {};
+
 /*
 {
   serie: 'A',
@@ -797,6 +829,15 @@ function dumpBook() {
   verifications.forEach(v => {
     console.log(JSON.stringify(v));
   });
+}
+
+function dumpTransactions(kontonr) {
+  console.log("dump transactions for %s", kontonr);
+  console.log("--------------------");
+  accounts[kontonr] && accounts[kontonr].trans && accounts[kontonr].trans.forEach(t => {
+    console.log([formatDate(t.transdat), itoa(t.belopp), t.transtext].join(", "));
+  });
+  console.log("--------------------");
 }
 
 function writeBook(book, filename) {
@@ -860,19 +901,49 @@ function readBook(filename) {
 	var type = Object.keys(data)[0];
 	var obj = data[type];
 
-	if(type === 'VER') {
-	  verifications.push(obj);
-	} else if(type === 'KONTO') {
+	if(type === 'KONTO') {
 	  if(accounts[data.kontonr]) {
 	    return reject("error reading accounting file, " + obj.kontonr + " already exits");
 	  }
 	  obj.kontonamn = obj.kontonamn.replace(/\n/g, ' ');
+	  obj.trans = [];
 	  accounts[obj.kontonr] = obj;
 	  accountsList.push(obj);
 
-	  if(obj.kontonr === '1730') {
-	    console.log("inside readbook konto: " + JSON.stringify(obj));
+	  //if(obj.kontonr === '1730') {
+	  //  console.log("inside readbook konto: " + JSON.stringify(obj));
+	  //}
+	} else if(type === 'VER') {
+
+	  obj.verdatum = convertDate(obj.verdatum);
+	  obj.regdatum = convertDate(obj.regdatum);
+
+	  //verifications.push(obj);
+	  appendVerification(obj);
+
+	  if(!obj.serie || !obj.vernr) {
+	    return reject("error reading accounting file, verification " + JSON.stringify(obj) + " has no regid");
 	  }
+
+	  var regId = obj.serie + obj.vernr;
+
+	  verificationNumber = obj.vernr + 1;
+
+	  obj.trans.forEach(t => {
+	    if(t.registred !== regId) {
+	      return reject("error reading accounting file, transaction in verification " + JSON.stringify(obj) + " has mismatching regid: %s !== %s", regId, t.registred);
+	    }
+	    if(!t.transdat) {
+	      return reject("error reading accounting file, transaction in verification " + JSON.stringify(obj) + " has no transdat");
+	    }
+
+	    t.transdat = convertDate(t.transdat);
+
+	    accounts[t.kontonr].trans.push(t);
+	    if(t.kontonr === '2731') {
+	      console.log("readBook, add: ", JSON.stringify(t));
+	    }
+	  });
 	}
       }
     });
@@ -891,6 +962,7 @@ function readBook(filename) {
 	      kontonr: k,
 	      kontonamn: konto.name,
 	      saldo: fromNumber(typeof konto.ib === 'number' ? konto.ib : 0),
+	      trans: []
 	    }, typeof konto.ib === 'number' ? { ib: fromNumber(konto.ib) } : {});
 	    accountsList.push(accounts[k]);
 	  });
@@ -912,13 +984,19 @@ function readBook(filename) {
 	  if(typeof k.ub === 'number' && k.saldo === 0) {
 	    k.saldo = k.ib;
 	  }
-	  if(!k.trans) {
-	    k.trans = [];
-	  }
 	});
       }
 
       validateBook();
+
+      /*
+      verifications.forEach(v => {
+	var regId = v.serie + v.regnr;
+	v.trans.forEach(t => {
+	  if(
+	});
+      });
+      */
       return resolve();
     });
   });
@@ -962,68 +1040,90 @@ function validateVerification(ver) {
   return true;
 }
 
+function appendVerification(ver) {
+  var verId = ver.serie + ver.vernr;
+  verifications.push(ver);
+  if(verificationsIndex[verId]) {
+    console.log("verification %s allready in ledger:\n", verId, JSON.stringify(verificationsIndex[verId]));
+    throw("verification %s allready in ledger:\n", verId, JSON.stringify(verificationsIndex[verId]));
+  }
+  verificationsIndex[verId] = ver;
+  if(verifications.length > 1 && verifications.slice(-2,1).verdatum > ver.verdatum) {
+    console.log("appendVerification, insert date mismatch: %s, %s", ""+verifications.slice(-2,1).verdatum, ""+ver.verdatum);
+    verifications.sort(verificationSortFunction);
+  }
+}
+
 
 function addVerification(ver) {
   // check if autobalance/motkonto exists
 
-  var motkonto = ver.trans.find(t => iszero(t.belopp));
-  if(motkonto) {
-    var sum = atoi("0");
-    //console.log("checksum: ", ver.trans);
-    ver.trans.forEach(t => { sum = add(sum, t.belopp) });
-    if(iszero(sum)) {
-      // motkonto redundant, remove
-      ver.trans = ver.trans.filter(t => (t !== motkonto) );
-    } else {
-      motkonto.belopp = neg(sum);
+  try {
+
+    var motkonto = ver.trans.find(t => iszero(t.belopp));
+    if(motkonto) {
+      var sum = atoi("0");
+      //console.log("checksum: ", ver.trans);
+      ver.trans.forEach(t => { sum = add(sum, t.belopp) });
+      if(iszero(sum)) {
+	// motkonto redundant, remove
+	ver.trans = ver.trans.filter(t => (t !== motkonto) );
+      } else {
+	motkonto.belopp = neg(sum);
+      }
     }
+
+    if(!validateVerification(ver)) {
+      throw("addVerification failed, Invalid verification");
+    }
+
+    ver.trans = ver.trans.map(t => {
+      if(t.registred) {
+	throw("Transaction already registred in verification: " + t.registred + ", " + JSON.stringify(t));
+      }
+
+      // find matching transaction in unbooked transactions
+      var mt = findTransaction(t.transtext || ver.vertext, t.kontonr, t.belopp, t.transdat, t.transdat);
+      if(mt) {
+	return mt;
+      } else {
+	return t;
+      }
+      //var findTransaction(t)
+    });
+
+    if(!ver.verdatum) {
+      ver.verdatum = ver.trans[0].transdat || (new Date());
+    }
+
+    // always use current date as regdatum
+    ver.regdatum = new Date();
+
+    ver.serie = verificationSeries;
+    ver.vernr = verificationNumber++;
+
+    const verId = ver.serie + ver.vernr;
+
+    ver.trans.forEach(t => {
+      t.registred = verId;
+      if(!accounts[t.kontonr]) {
+	console.log("add account: ", t.kontonr);
+	addAccount(t.kontonr);
+      }
+      if(!t.transdat) {
+	t.transdat = ver.verdatum;
+      }
+      accounts[t.kontonr].saldo = add(accounts[t.kontonr].saldo, t.belopp);
+      //console.log("add transactions to account: ", accounts[t.kontonr]);
+      accounts[t.kontonr].trans.push(t);
+    });
+
+    appendVerification(ver);
+  } catch(e) {
+    console.log("Failed to add verification:\n", JSON.stringify(ver, null, 2));
+    console.log("error: ", e);
+    throw e;
   }
-
-  if(!validateVerification(ver)) {
-    throw("addVerification failed, Invalid verification");
-  }
-
-  ver.trans = ver.trans.map(t => {
-    if(t.registred) {
-      throw("Transaction already registred in verification: " + t.registred + ", " + JSON.stringify(t));
-    }
-
-    // find matching transaction in unbooked transactions
-    var mt = findTransaction(t.transtext || ver.vertext, t.kontonr, t.belopp, t.transdat, t.transdat);
-    if(mt) {
-      return mt;
-    } else {
-      return t;
-    }
-    //var findTransaction(t)
-  });
-
-  if(!ver.verdatum) {
-    ver.verdatum = ver.trans[0].transdat || (new Date());
-  }
-
-  // always use current date as regdatum
-  ver.regdatum = new Date();
-
-  ver.serie = verificationSeries;
-  ver.vernr = verificationNumber++;
-
-  const verId = ver.serie + ver.vernr;
-
-  ver.trans.forEach(t => {
-    t.registred = verId;
-    if(!accounts[t.kontonr]) {
-      addAccount(t.kontonr);
-    }
-    if(!t.transdat) {
-      t.transdat = ver.verdatum;
-    }
-    accounts[t.kontonr].saldo = add(accounts[t.kontonr].saldo, t.belopp);
-    accounts[t.kontonr].trans.push(t);
-  });
-
-  verifications.push(ver);
-  verifications.sort(verificationSortFunction);
 }
 
 function readFileUTF8(filename) {
@@ -1311,7 +1411,17 @@ var cmds = {
 //    });
   },
   trans: function(kontonr) {
-    accounts[kontonr].trans.forEach(t => console.log(json(t)));
+    console.log("konto: %s", kontonr);
+    console.log("IB: %s", itoa(accounts[kontonr].ib));
+    var table = [];
+    console.log("--------------------");
+    accounts[kontonr].trans.forEach(t => {
+      console.log("add transaction: ", t);
+      table.push({ datum: formatDate(t.transdat), belopp: itoa(t.belopp), beskrivning: t.transtext || ''})
+    });
+    printTable(table);
+    console.log("--------------------");
+    console.log("UB: %s", itoa(accounts[kontonr].saldo));
   },
 
   sum: function(kontonr) {
@@ -1383,9 +1493,9 @@ var cmds = {
 
     accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
 
-      if(k.kontonr === '1730') {
-	console.log("balans konto: " + JSON.stringify(k));
-      }
+      //if(k.kontonr === '1730') {
+      //console.log("balans konto: " + JSON.stringify(k));
+      //}
 
       rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
       sum = add(sum, k.saldo);
@@ -1408,8 +1518,132 @@ var cmds = {
     console.log("summa: " + itoa(sum));
 
   },
-  validate: function() {
+  resultat: function() {
+    console.log("Intäkter:");
+    var intäkter = zero();
 
+    var rapport = [];
+
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'I').forEach(k => {
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
+      intäkter = add(intäkter, k.saldo);
+    });
+    printTable(rapport);
+    console.log("\nIntäkter");
+    console.log("------------------------------------------");
+    console.log("summa: " + itoa(intäkter));
+
+    rapport = [];
+
+    var kostnader = 0;
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'K').forEach(k => {
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
+      kostnader = add(kostnader, k.saldo);
+    });
+    console.log("\nkostnader");
+    printTable(rapport);
+    console.log("------------------------------------------");
+    console.log("summa: " + itoa(kostnader));
+    console.log("\nRörelseresultat: " + itoa(neg(add(kostnader, intäkter))));
+  },
+  validate: function() {
+    // check ingående balans
+    var tillgångar = zero();
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
+      tillgångar = add(tillgångar, k.ib);
+    });
+    var skulder = zero();
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
+      skulder = add(skulder, k.ib);
+    });
+    console.log("ingående balans");
+    console.log("tillgångar: " + itoa(tillgångar));
+    console.log("skulder: " + itoa(skulder));
+    if(!equal(tillgångar,neg(skulder))) {
+      console.log("Ingående tillgångar och skulder balanserar inte!");
+    }
+
+    var konton = accountsList.reduce( (a, k) => {
+      var ktyp = basKontotyp(k.kontonr);
+      if(ktyp === 'T' || ktyp === 'S') {
+	a[k.kontonr] = k.ib;
+      } else {
+	a[k.kontonr] = zero();
+      }
+      return a;
+    }, {});
+
+    //console.log("Ingående balans på konton:\n", JSON.stringify(konton, null, 2));
+
+    var prevVerdatum = 0;
+
+    verifications.forEach(v => {
+      if(!validateVerification(v)) {
+	console.log("verifikation felaktig, balanserar inte");
+	console.log(JSON.stringify(v, null, 2));
+      }
+
+      if(!v.serie || !v.vernr) {
+	console.log("verifikation saknar regid: ");
+	console.log(JSON.stringify(v, null, 2));
+      }
+
+      if(!v.regdatum) {
+	console.log("verifikation saknar regdatum: ", v.serie+v.vernr);
+      }
+
+      if(!v.verdatum) {
+	console.log("verifikation saknar verdatum: ", v.serie+v.vernr);
+      } else if(v.verdatum < prevVerdatum) {
+	console.log("verifikation ligger i fel ordning: ", v.serie+v.vernr);
+      }
+
+      prevVerdatum = v.verdatum;
+
+      v.trans.forEach(t => {
+	if(typeof konton[t.kontonr] === 'undefined') {
+	  console.log("invalid transaction, kontonr %s not in acccountsList", t.kontonr);
+	}
+	konton[t.kontonr] = add(konton[t.kontonr], t.belopp);
+	if(!t.transdat) {
+	  console.log("transaktion saknar transaktionsdatum, ver %d, trans: %s ", v.serie+v.vernr, JSON.stringify(t));
+	}
+	if(!t.registred || t.registred !== (v.serie+v.vernr)) {
+	  console.log("transaktion i verifikation %s har felaktigt registrerad verifikations id, trans: %s", v.serie+v.vernr, JSON.stringify(t));
+	}
+      });
+    });
+
+    Object.keys(konton).forEach(k => {
+      if(!equal(konton[k], accounts[k].saldo)) {
+	console.log("saldo på konto stämmer inte med verifikationer: ", k);
+	console.log("%s, %s", itoa(konton[k]), itoa(accounts[k].saldo));
+      };
+    });
+
+    tillgångar = zero();
+    skulder = zero();
+/*
+    var intäkter = zero();
+    var kostnader = zero();
+    accountsList.forEach(k => {
+      var ktyp = basKontotyp(k.kontonr);
+    });
+*/
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
+      tillgångar = add(tillgångar, k.saldo);
+    });
+
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
+      skulder = add(skulder, k.saldo);
+    });
+
+    console.log("utgående balans");
+    console.log("tillgångar: " + itoa(tillgångar));
+    console.log("skulder: " + itoa(skulder));
+    if(!equal(tillgångar,neg(skulder))) {
+      console.log("Utgående tillgångar och skulder balanserar inte!");
+    }
   },
   book: function() {
 
@@ -1685,13 +1919,16 @@ if(options.repl) {
 async function run() {
   await importBaskontoplan(options.baskontoplan);
   await readBook(options.infile || options.accountingFile);
-  console.log("readBook: " + JSON.stringify(accounts['1730']));
+
+  //dumpTransactions('2731');
+
+  //console.log("readBook: " + JSON.stringify(accounts['1730']));
   await safeReadJsonFile(options.transactionsFile, transactions);
-  console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
+  //console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
   console.log("running importVerifications, transactions: " + transactions.length);
   let verStat = await importVerifications();
   console.log("verifications imported");
-  console.log("check account: " + JSON.stringify(accounts['1730']));
+  //console.log("check account: " + JSON.stringify(accounts['1730']));
   if(options.autobook) {
     console.log("run autobook");
     transactions.forEach(t => {
@@ -1704,8 +1941,11 @@ async function run() {
     });
     console.log("autobook done");
   }
-  console.log("accounting init done, run command");
 
+  sortVerifications();
+  sortTransactions();
+
+  console.log("accounting init done, run command");
 
   cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
   if(options.commit) {
