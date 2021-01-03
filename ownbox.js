@@ -664,8 +664,8 @@ function basKontotyp(kontonr) {
     return 'S';
   } else if(kontonr.startsWith("3")) {
     return 'I';
-  } else if(kontonr.startsWith("8")) {
-
+//  } else if(kontonr.startsWith("8")) {
+//    return 'K';
   } else {
     return 'K';
   }
@@ -1545,6 +1545,41 @@ var cmds = {
     console.log("------------------------------------------");
     console.log("summa: " + itoa(kostnader));
     console.log("\nRörelseresultat: " + itoa(neg(add(kostnader, intäkter))));
+  },
+  deklaration: function() {
+    function generateBlankett() {
+
+      var out = []
+
+      out = out.concat(
+	`#BLANKETT INK2R-${deklarationsPeriod}
+#IDENTITET 165590710314 ${blankettDatum} 080000
+#NAMN Ernelli Consulting AB
+#UPPGIFT 7011 ${startDate}
+#UPPGIFT 7012 ${endDate}`.split("\n"));
+
+      out = out.concat(ink2r.map( (v) => ("#UPPGIFT " + v.srukod + " " + Math.floor(v.saldo)*Math.sign(v.saldo)) ) );
+      out.push("#BLANKETTSLUT");
+
+      out = out.concat(
+	`#BLANKETT INK2S-${deklarationsPeriod}
+#IDENTITET 165590710314 ${blankettDatum} 080000
+#NAMN Ernelli Consulting AB
+#UPPGIFT 7011 ${startDate}
+#UPPGIFT 7012 ${endDate}`.split("\n"))
+
+      out = out.concat(ink2s.map( (v) => ("#UPPGIFT " + v.srukod + " " + Math.floor(v.saldo)*Math.sign(v.saldo)) ) )
+
+      out.push("#BLANKETTSLUT");
+      out.push("#FIL_SLUT");
+
+      return out;
+}
+
+console.log(generateBlankett().join("\n"));
+
+fs.writeFileSync("BLANKETTER.SRU", generateBlankett().join("\n") + "\n");
+
   },
   validate: function() {
     // check ingående balans
