@@ -430,6 +430,9 @@ var transactionsFile;
 var startDate;
 var endDate;
 
+var financialYearStartDate;
+var financialYearEndDate;
+
 function setDates() {
   var rar = options.räkenskapsår || "0101 - 1231";
 
@@ -439,22 +442,41 @@ function setDates() {
 
   var [start,end] = rar.split(" - ").map(d => d.match(/\d\d/g).map(n => 1*n));
 
-  console.log("start-end: ", [start,end]);
+  [financialYearStartDate, financialYearEndDate] = rar.split(" - ");
+
+  console.log("Räkenskapsår: ", [financialYearStartDate, financialYearEndDate]);
+
+  debug("start-end: ", [start,end]);
+
+
+  debug("calculate financial year startDate && endDate from %s", formatDate(now, "-"));
 
   startDate = new Date(now.getFullYear(), start[0]-1, start[1]);
-  console.log("endDate args: ", now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1] + 1);
+
+  debug("Calculated startDate: %s", formatDate(startDate, "-"));
+
+  debug("endDate args: ", now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1] + 1);
   endDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1] + 1);
+  var endPrintDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1]);
+
+  while(startDate > now) {
+    startDate = new Date(startDate.getFullYear() - 1, startDate.getMonth(), startDate.getDate());
+    endDate = new Date(endDate.getFullYear() - 1, endDate.getMonth(), endDate.getDate());
+    endPrintDate = new Date(endPrintDate.getFullYear() - 1, endPrintDate.getMonth(), endPrintDate.getDate());
+  }
 
   // endDate extends into next day for range queries to work properly
   // printDate is 0101 - 1231
-  var endPrintDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1]);
+  //var endPrintDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1]);
 
-  console.log("startDate: " + startDate);
-  console.log("endDate: " + endDate);
+
+  debug("startDate: " + startDate);
+  debug("endDate: " + endDate);
+  debug("endPrint: " + endPrintDate);
 
   finansialYearString = formatDate(startDate, ".") + "-" + formatDate(endPrintDate, ".");
 
-  console.log("finansialYearString: " + finansialYearString);
+  debug("finansialYearString: " + finansialYearString);
 }
 
 function dateRangeFilter(from, to, field) {
@@ -941,7 +963,7 @@ function readBook(filename) {
 
 	    accounts[t.kontonr].trans.push(t);
 	    if(t.kontonr === '2731') {
-	      console.log("readBook, add: ", JSON.stringify(t));
+	      debug("readBook, add: ", JSON.stringify(t));
 	    }
 	  });
 	}
@@ -1547,7 +1569,79 @@ var cmds = {
     console.log("\nRörelseresultat: " + itoa(neg(add(kostnader, intäkter))));
   },
   deklaration: function() {
+
+    function fieldCode(code, balance) {
+      var parts = code.split(",");
+      if(parts.length === 1) {
+	return code;
+      }
+
+      var sign = balance < 0 ? "-1" : "1";
+
+      return parts.filter(v => v.startsWith(sign + ":"))[0].split(":")[1];
+    }
+
+
+    var kontoMap = accountsList.slice(0).sort( (a,b) => { return (1*a.konto - 1*b.konto); } );
+
+    var ink2r = kontoMap.reduce( (a,v,i) => {
+      //  console.log("Check index: ", i, v);
+
+      if(!i || a[a.length-1].srukod !== v.srukod) {
+	a.push(Object.assign({},v));
+      } else {
+	a[a.length-1].saldo += v.saldo;
+	a[a.length-1].konto +="," + v.konto
+      }
+      return a;
+    },[]).map(v => {v.srukod = fieldCode(v.srukod, v.saldo); return v; });
+
+    var konton = kontoMap.reduce( (a,v) => { a[v.konto] = v; return a; }, {});
+
+    var sruCodes = {
+      "4.1":  "7650",
+      "4.3a": "7651",
+      "4.3c": "7653",
+      "4.15": "7670"
+    };
+
+    function sruCode(code) {
+      return sruCodes[code];
+    }
+
+    function addField(code, accounts) {
+      var sum = accounts.split(",").reduce( (a,v) => a + accounts[v].saldo|0, 0);
+
+      return { srukod: sruCode(code), saldo: sum };
+    }
+
+    ink2s = [
+      addField("4.1", "8999"),
+      addField("4.3a", "8910"),
+      addField("4.3c", "8423,6072"),
+      addField("4.15", "8999,8910,8423,6072")
+    ];
+
+
     function generateBlankett() {
+
+      var beskattningsperioder =
+	  (["31/1, 28/2, 31/3, 30/4",
+	    "31/5, 30/6",
+	    "31/7, 31/8",
+	    "30/9, 31/10, 30/11, 31/12"]).reduce( (a,v,i) => {
+	      v.split(", ").forEach(d => {
+		var [day, month] = d.split("/");
+		a[("0"+month).slice(-2) + ("0"+day).slice(-2)] = "P" + (i+1);
+	      });
+	      return a;
+	    },{});
+
+      var deklarationsPeriod = startDate.getFullYear() + (beskattningsperioder[financialYearEndDate]);
+      var bolagsnamn = options.bolagsnamn || "Demobolag AB";
+      var blankettDatum = formatDate(new Date(), "");
+      var startDatum = formatDate(startDate, "");
+      var slutDatum = formatDate(startDate, "");
 
       var out = []
 
@@ -1555,8 +1649,8 @@ var cmds = {
 	`#BLANKETT INK2R-${deklarationsPeriod}
 #IDENTITET 165590710314 ${blankettDatum} 080000
 #NAMN Ernelli Consulting AB
-#UPPGIFT 7011 ${startDate}
-#UPPGIFT 7012 ${endDate}`.split("\n"));
+#UPPGIFT 7011 ${startDatum}
+#UPPGIFT 7012 ${slutDatum}`.split("\n"));
 
       out = out.concat(ink2r.map( (v) => ("#UPPGIFT " + v.srukod + " " + Math.floor(v.saldo)*Math.sign(v.saldo)) ) );
       out.push("#BLANKETTSLUT");
@@ -1576,9 +1670,9 @@ var cmds = {
       return out;
 }
 
-console.log(generateBlankett().join("\n"));
+    console.log(generateBlankett().join("\n"));
 
-fs.writeFileSync("BLANKETTER.SRU", generateBlankett().join("\n") + "\n");
+    fs.writeFileSync("BLANKETTER.SRU", generateBlankett().join("\n") + "\n");
 
   },
   validate: function() {
