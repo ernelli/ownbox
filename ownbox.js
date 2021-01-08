@@ -33,6 +33,7 @@ var options = Object.assign({
   verifications: "verifications",
   autobook: true,
   noAutobook: false,
+  importVerifications: false,
   commit: false,
   infile: "",
 },conf);
@@ -150,6 +151,10 @@ function neg(num) {
   return -num;
 }
 
+function abs(num) {
+  return Math.abs(num);
+}
+
 function muldiv(num, mul, div) {
   return Math.round((num*mul)/div);
 }
@@ -222,6 +227,10 @@ function itoa(num) {
   var frac = ("00"+(Math.abs(num) % 100 | 0)).slice(-2);
 
   return (sign < 0 ? '-' : '') + integer + '.' + frac;
+}
+
+function formatInteger(num) {
+  return ""+(num / 100 | 0)
 }
 
 function lineReader(rs, ws) {
@@ -429,7 +438,9 @@ var ledgerFile;
 var transactionsFile;
 
 var startDate;
-var endDate;
+var endDate; //this is a crutch, endDate is set to one day after financialYear
+
+var endPrintDate; //this represents the actual endDate to be printed
 
 var financialYearStartDate;
 var financialYearEndDate;
@@ -458,7 +469,7 @@ function setDates() {
 
   debug("endDate args: ", now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1] + 1);
   endDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1] + 1);
-  var endPrintDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1]);
+  endPrintDate = new Date(now.getFullYear() + (start[0] > end[0] ? 1 : 0), end[0]-1, end[1]);
 
   while(startDate > now) {
     startDate = new Date(startDate.getFullYear() - 1, startDate.getMonth(), startDate.getDate());
@@ -707,13 +718,19 @@ function isBalanskonto(kontonr) {
 }
 
 function findSRUcode(account) {
-  debug("find SRU code for account: ", account);
 
   var match = [];
 
   for(i = 0; i < SRU_koder.length; i++) {
-    //debug("Match account against rule: ", SRU_koder[i].rules);
     if(account.match(SRU_koder[i].rules.include) && (!SRU_koder[i].rules.exclude || !account.match(SRU_koder[i].rules.exclude))) {
+
+      /*
+      if(account.startsWith("25") || account.startsWith("26")) {
+	console.log("rule matched: " + JSON.stringify(SRU_koder[i]));
+	console.log("include: "+ SRU_koder[i].rules.include);
+	console.log("exclude: "+ SRU_koder[i].rules.include);
+      }
+      */
       //return [SRU_koder[i].code, SRU_koder[i].ink2];
 
       if(SRU_koder[i].rules.matchsign) {
@@ -743,7 +760,7 @@ function importSRUkoder(filename) {
     var exclude = [];
     var matchsign;
 
-    debug("parse SRU rule: ", rule);
+    //console.log("parse SRU rule: ", rule);
 
     rule = rule.trim();
 
@@ -839,7 +856,7 @@ function importSRUkoder(filename) {
   }
 
   function addRecord(record) {
-    //console.log("adding SRU codes: ", record);
+    //console.log("adding SRU codes record: ", JSON.stringify(record));
 
     if(record[0].match(/^7\d\d\d$/)) {
       //SRU_koder.push(record[0]);
@@ -864,7 +881,7 @@ function importSRUkoder(filename) {
 
     lineReader(fs.createReadStream(filename, { encoding: 'utf8'}).on('end', () => {
       console.log("srukoder done");
-      console.log("slask: ", slask);
+      //console.log("slask: ", slask);
       //Object.keys(basKontoplan).forEach(k => console.log(basKontoplan[k].kontonr + ": " + basKontoplan[k].kontonamn));
       return resolve();
     })).on('line', (line) => {
@@ -1607,9 +1624,13 @@ var cmds = {
   srukoder: function(filename) {
     importSRUkoder(filename || options.srukoder).then( (res) => {
 
-    var testdata = (""+fs.readFileSync("SRU_test.se")).split(/[\r\n]+/);
+      SRU_koder.forEach(s => {
+	console.log("SRU: " + JSON.stringify(s));
+      });
 
-    console.log("testdata[0] = [" + testdata[0] + "]");
+      var testdata = (""+fs.readFileSync("SRU_test.se")).split(/[\r\n]+/);
+
+      console.log("testdata[0] = [" + testdata[0] + "]");
 
       testdata.forEach(l => {
 	var fields = l.split(/[ ]+/);
@@ -1618,7 +1639,7 @@ var cmds = {
 	  var srukod = fields[2];
           var res = findSRUcode(konto);
 	  if(res) {
-	    console.log("SRU code for ", konto, srukod, " matches: ", res.srukod); //, JSON.stringify(res));
+	    console.log("SRU code for ", konto, srukod, " matches: ", res.srukod, (srukod !== res.srukod) ? "FEL!!!" : ""); //, JSON.stringify(res));
 	  } else {
 	    console.log("SRU code for KONTO: ", konto, "SRU: ", srukod, " NOMATCH");
 	  }
@@ -1803,21 +1824,29 @@ var cmds = {
     }
 
 
-    var kontoMap = accountsList.slice(0).sort( (a,b) => { return (1*a.konto - 1*b.konto); } );
+    var kontoMap = accountsList.slice(0).sort( (a,b) => { return (1*a.kontonr - 1*b.kontonr); } );
+
+    kontoMap.forEach(k => {
+      k.sru = findSRUcode(k.kontonr);
+
+      if(!k.sru) {
+	console.log("sru kod for account: " + k.kontonr + ", not found");
+      }
+    });
 
     var ink2r = kontoMap.reduce( (a,v,i) => {
       //  console.log("Check index: ", i, v);
 
-      if(!i || a[a.length-1].srukod !== v.srukod) {
+      if(!i || a[a.length-1].sru.srukod !== v.sru.srukod) {
 	a.push(Object.assign({},v));
       } else {
-	a[a.length-1].saldo += v.saldo;
-	a[a.length-1].konto +="," + v.konto
+	a[a.length-1].saldo = add(a[a.length-1].saldo, v.saldo);
+	a[a.length-1].konto +="," + v.kontonr
       }
       return a;
-    },[]).map(v => {v.srukod = fieldCode(v.srukod, v.saldo); return v; });
+    },[]).map(v => {v.srukod = fieldCode(v.sru.srukod, v.saldo); return v; });
 
-    var konton = kontoMap.reduce( (a,v) => { a[v.konto] = v; return a; }, {});
+    var konton = kontoMap.reduce( (a,v) => { a[v.kontonr] = v; return a; }, {});
 
     var sruCodes = {
       "4.1":  "7650",
@@ -1830,13 +1859,13 @@ var cmds = {
       return sruCodes[code];
     }
 
-    function addField(code, accounts) {
-      var sum = accounts.split(",").reduce( (a,v) => a + accounts[v].saldo|0, 0);
+    function addField(code, accountList) {
+      var sum = accountList.split(",").reduce( (a,v) => add(a,accounts[v].saldo), zero());
 
       return { srukod: sruCode(code), saldo: sum };
     }
 
-    ink2s = [
+    var ink2s = [
       addField("4.1", "8999"),
       addField("4.3a", "8910"),
       addField("4.3c", "8423,6072"),
@@ -1860,30 +1889,31 @@ var cmds = {
 
       var deklarationsPeriod = startDate.getFullYear() + (beskattningsperioder[financialYearEndDate]);
       var bolagsnamn = options.bolagsnamn || "Demobolag AB";
+      var identitet = options.identitet || "191010101010";
       var blankettDatum = formatDate(new Date(), "");
       var startDatum = formatDate(startDate, "");
-      var slutDatum = formatDate(startDate, "");
+      var slutDatum = formatDate(endPrintDate, "");
 
       var out = []
 
       out = out.concat(
-	`#BLANKETT INK2R-${deklarationsPeriod}
-#IDENTITET 165590710314 ${blankettDatum} 080000
-#NAMN Ernelli Consulting AB
+`#BLANKETT INK2R-${deklarationsPeriod}
+#IDENTITET ${identitet} ${blankettDatum} 080000
+#NAMN ${bolagsnamn}
 #UPPGIFT 7011 ${startDatum}
 #UPPGIFT 7012 ${slutDatum}`.split("\n"));
 
-      out = out.concat(ink2r.map( (v) => ("#UPPGIFT " + v.srukod + " " + Math.floor(v.saldo)*Math.sign(v.saldo)) ) );
+      out = out.concat(ink2r.map( (v) => ("#UPPGIFT " + v.srukod + " " + formatInteger(abs(v.saldo))) ) );
       out.push("#BLANKETTSLUT");
 
       out = out.concat(
 	`#BLANKETT INK2S-${deklarationsPeriod}
-#IDENTITET 165590710314 ${blankettDatum} 080000
-#NAMN Ernelli Consulting AB
-#UPPGIFT 7011 ${startDate}
-#UPPGIFT 7012 ${endDate}`.split("\n"))
+#IDENTITET ${identitet} ${blankettDatum} 080000
+#NAMN ${bolagsnamn}
+#UPPGIFT 7011 ${startDatum}
+#UPPGIFT 7012 ${slutDatum}`.split("\n"));
 
-      out = out.concat(ink2s.map( (v) => ("#UPPGIFT " + v.srukod + " " + Math.floor(v.saldo)*Math.sign(v.saldo)) ) )
+      out = out.concat(ink2s.map( (v) => ("#UPPGIFT " + v.srukod + " " + formatInteger(abs(v.saldo))) ) );
 
       out.push("#BLANKETTSLUT");
       out.push("#FIL_SLUT");
@@ -2268,6 +2298,7 @@ if(options.repl) {
 
 async function run() {
   await importBaskontoplan(options.baskontoplan);
+  await importSRUkoder(options.srukoder);
   await readBook(options.infile || options.accountingFile);
 
   //dumpTransactions('2731');
@@ -2275,9 +2306,11 @@ async function run() {
   //console.log("readBook: " + JSON.stringify(accounts['1730']));
   await safeReadJsonFile(options.transactionsFile, transactions);
   //console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
-  console.log("running importVerifications, transactions: " + transactions.length);
-  let verStat = await importVerifications();
-  console.log("verifications imported");
+  if(options.importVerifications) {
+    console.log("running importVerifications, transactions: " + transactions.length);
+    let verStat = await importVerifications();
+    console.log("verifications imported");
+  }
   //console.log("check account: " + JSON.stringify(accounts['1730']));
   if(options.autobook) {
     console.log("run autobook");
@@ -2302,9 +2335,10 @@ async function run() {
     await writeBook({ accountsList: accountsList, verifications: verifications }, options.accountingFile);
   }
 
-  console.log("alldone, dump unbooked transactions");
+
 
   if(options.autobook) {
+    console.log("dump unbooked transactions");
     transactions.forEach(t => {
       if(!t.registred) {
 	console.log("unbooked transaction: " + JSON.stringify(t));
