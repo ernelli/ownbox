@@ -1,0 +1,23 @@
+{
+  "name": "ownbox",
+  "version": "1.0.0",
+  "description": "Simple book-keeping system",
+  "main": "ownbox.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ernelli/ownbox.git"
+  },
+  "author": "Mattias Ernelli",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/ernelli/ownbox/issues"
+  },
+  "homepage": "https://github.com/ernelli/ownbox#readme",
+  "dependencies": {
+    "iconv": "^3.0.0",
+    "yaml": "^1.10.0"
+  }
+}

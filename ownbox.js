@@ -9,6 +9,7 @@ const fsp = require('fs').promises;
 const stream = require('stream');
 const { promisify, inherits } = require('util');
 const YAML = require('yaml');
+const Iconv = require('iconv').Iconv;
 
 const name = "ownbox";
 
@@ -68,6 +69,9 @@ function json(o) {
   return JSON.stringify(o);
 }
 
+
+
+var utf8toLATIN1Converter = new Iconv("UTF-8", "ISO-8859-1");
 
 function JsonLineWriter(options) {
  if (!(this instanceof JsonLineWriter))
@@ -1873,6 +1877,41 @@ var cmds = {
     ];
 
 
+    function generateInfo() {
+
+      var bolagsnamn = options.bolagsnamn || "Demobolag AB";
+
+      var orgnr = options.orgnummer || "191010101010";
+      var postnr = options.postnr || "11111";
+      var postort = options.postort || "STOCKHOLM";
+      var kontakt = options.kontakt || "Karl Kontakt";
+      var email = options.email || "karl.kontakt@mail.com";
+      var telefon = options.telefon || "0701234567";
+
+      var blankettDatum = formatDate(new Date(), "");
+
+      var info =
+`#DATABESKRIVNING_START
+#PRODUKT SRU
+#SKAPAD ${blankettDatum}
+#PROGRAM ownbox
+#FILNAMN BLANKETTER.SRU
+#DATABESKRIVNING_SLUT
+#MEDIELEV_START
+#ORGNR ${orgnr}
+#NAMN ${bolagsnamn}
+#POSTNR ${postnr}
+#POSTORT ${postort}
+#KONTAKT ${kontakt}
+#EMAIL ${email}
+#TELEFON ${telefon}
+#MEDIELEV_SLUT`
+;
+
+
+      return info;
+    }
+
     function generateBlankett() {
 
       var beskattningsperioder =
@@ -1890,15 +1929,24 @@ var cmds = {
       var deklarationsPeriod = startDate.getFullYear() + (beskattningsperioder[financialYearEndDate]);
       var bolagsnamn = options.bolagsnamn || "Demobolag AB";
       var identitet = options.identitet || "191010101010";
+      var orgnr = options.orgnummer || "191010101010";
+      var postnr = options.postnr || "11111";
+      var postort = options.postort || "STOCKHOLM";
+      var kontakt = options.kontakt || "Karl Kontakt";
+      var email = options.email || "karl.kontakt@mail.com";
+      var telefon = options.telefon || "0701234567";
+
       var blankettDatum = formatDate(new Date(), "");
       var startDatum = formatDate(startDate, "");
       var slutDatum = formatDate(endPrintDate, "");
+
+
 
       var out = []
 
       out = out.concat(
 `#BLANKETT INK2R-${deklarationsPeriod}
-#IDENTITET ${identitet} ${blankettDatum} 080000
+#IDENTITET ${identitet} ${blankettDatum}
 #NAMN ${bolagsnamn}
 #UPPGIFT 7011 ${startDatum}
 #UPPGIFT 7012 ${slutDatum}`.split("\n"));
@@ -1908,7 +1956,7 @@ var cmds = {
 
       out = out.concat(
 	`#BLANKETT INK2S-${deklarationsPeriod}
-#IDENTITET ${identitet} ${blankettDatum} 080000
+#IDENTITET ${identitet} ${blankettDatum}
 #NAMN ${bolagsnamn}
 #UPPGIFT 7011 ${startDatum}
 #UPPGIFT 7012 ${slutDatum}`.split("\n"));
@@ -1918,12 +1966,13 @@ var cmds = {
       out.push("#BLANKETTSLUT");
       out.push("#FIL_SLUT");
 
-      return out;
+      return out.join("\n") + "\n"
 }
 
-    console.log(generateBlankett().join("\n"));
+    console.log(generateBlankett());
 
-    fs.writeFileSync("BLANKETTER.SRU", generateBlankett().join("\n") + "\n");
+    fs.writeFileSync("INFO.SRU", utf8toLATIN1Converter.convert(generateInfo()));
+    fs.writeFileSync("BLANKETTER.SRU", utf8toLATIN1Converter.convert(generateBlankett()));
 
   },
   validate: function() {
