@@ -1255,7 +1255,7 @@ function transferBook() {
       kontonamn: a.kontonamn,
       kontotyp: a.kontotyp,
     },
-    isBalanskonto(a.kontonr) ? { ib: a.saldo, saldo: 0 } : { saldo: 0},
+    isBalanskonto(a.kontonr) ? { ib: a.saldo, saldo: a.saldo } : { saldo: 0},
     { trans: [] }
   ));
   return nextYear;
@@ -1719,7 +1719,7 @@ var cmds = {
       console.log("add transaction: ", t);
       table.push({ datum: formatDate(t.transdat), belopp: itoa(t.belopp), beskrivning: t.transtext || ''})
     });
-    printTable(table);
+    table.length > 0 && printTable(table);
     console.log("--------------------");
     console.log("UB: %s", itoa(accounts[kontonr].saldo));
   },
@@ -1797,7 +1797,7 @@ var cmds = {
       //console.log("balans konto: " + JSON.stringify(k));
       //}
 
-      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: formatNumber(k.saldo, 10)});
       sum = add(sum, k.saldo);
     });
     printTable(rapport);
@@ -1809,7 +1809,7 @@ var cmds = {
 
     sum = 0;
     accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
-      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: formatNumber(k.saldo, 10)});
       sum = add(sum, k.saldo);
     });
     console.log("\nskulder");
