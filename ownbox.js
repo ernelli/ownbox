@@ -427,8 +427,16 @@ function convertDate(d) {
   }
 }
 
+function formatNumber(n, width) {
+  return ("                    "+itoa(n)).slice(-width);
+}
+
 function formatDate(d, separator) {
   return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
+}
+
+function formatTime(d, separator) {
+  return [ ("00"+d.getHours()).slice(-2), ("00"+(d.getMinutes())).slice(-2), ("00"+d.getSeconds()).slice(-2)].join(typeof separator !== 'undefined' ? separator : ':');
 }
 
 function addDays(d, days) {
@@ -993,7 +1001,7 @@ function importBaskontoplan(filename) {
 var accounts = {};
 var accountsList = [];
 
-/* account
+/* -account
 {
   kontonr: "1510"
   kontonamn: "Kundfodringar"
@@ -1026,7 +1034,7 @@ function addAccount(kontonr, kontonamn, kontotyp) {
 
 // imported transactions for autobooking
 var transactions = [];
-/*
+/* -transactions
 {
   kontonr: "1510",
   objekt: [],
@@ -1044,7 +1052,7 @@ var verificationNumber = 1;
 var verifications = [];
 var verificationsIndex = {};
 
-/*
+/* -verifications
 {
   serie: 'A',
   vernr: 1,
@@ -1389,8 +1397,32 @@ function importVerification(data) {
     return ret;
   });
 
+  // check if verification is within current financial year
   if(ver.verdatum >= startDate && ver.verdatum <= endDate) {
-    addVerification(ver);
+
+    if(verifications.filter(v => Math.abs(v.verdatum.getTime()-ver.verdatum.getTime()) < 24*3600*1000).some(v => {
+      if(formatDate(v.verdatum, "") === formatDate(ver.verdatum, "")) {
+	// same date
+	if(v.vertext === ver.vertext) {
+	  // check if all transactinos match, unless belopp is 0 (motkonto)
+
+	  if(ver.trans.every(t => {
+	    if(iszero(t.belopp)) {
+	      return true;
+	    }
+	    return v.trans.some(vt => isTransactionsEqual(vt,t));
+	  })) {
+	    return true;
+	  }
+	}
+      }
+      return false;
+    })) {
+      debug("ignore import verificaion, allready in book: ", json(ver))
+    } else {
+      debug("import, add verification: ", json(ver));
+      addVerification(ver);
+    }
   }
   return ver;
 }
@@ -1695,9 +1727,9 @@ var cmds = {
   sum: function(kontonr) {
     console.log(kontonr);
     console.log("-------");
-    accounts[kontonr] && accounts[kontonr].trans.forEach(t => console.log(itoa(t.belopp)));
+    accounts[kontonr] && accounts[kontonr].trans.forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat),t.transtext || verificationsIndex[t.registred].vertext));
     console.log("-------");
-    console.log(itoa(sumTransactions(accounts[kontonr].trans)));
+    console.log(formatNumber(sumTransactions(accounts[kontonr].trans), 10));
   },
   arbetsgivaravgifter: function(month) {
 
@@ -1936,7 +1968,9 @@ var cmds = {
       var email = options.email || "karl.kontakt@mail.com";
       var telefon = options.telefon || "0701234567";
 
-      var blankettDatum = formatDate(new Date(), "");
+      var datFramst = formatDate(new Date(), "");
+      var tidFramst = formatTime(new Date(), "");
+
       var startDatum = formatDate(startDate, "");
       var slutDatum = formatDate(endPrintDate, "");
 
@@ -1946,7 +1980,7 @@ var cmds = {
 
       out = out.concat(
 `#BLANKETT INK2R-${deklarationsPeriod}
-#IDENTITET ${identitet} ${blankettDatum}
+#IDENTITET ${identitet} ${datFramst} ${tidFramst}
 #NAMN ${bolagsnamn}
 #UPPGIFT 7011 ${startDatum}
 #UPPGIFT 7012 ${slutDatum}`.split("\n"));
@@ -1956,7 +1990,7 @@ var cmds = {
 
       out = out.concat(
 	`#BLANKETT INK2S-${deklarationsPeriod}
-#IDENTITET ${identitet} ${blankettDatum}
+#IDENTITET ${identitet} ${datFramst} ${tidFramst}
 #NAMN ${bolagsnamn}
 #UPPGIFT 7011 ${startDatum}
 #UPPGIFT 7012 ${slutDatum}`.split("\n"));
