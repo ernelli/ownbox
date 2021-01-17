@@ -34,9 +34,11 @@ var options = Object.assign({
   verifications: "verifications",
   autobook: true,
   noAutobook: false,
-  importVerifications: false,
+  importVerifications: true,
+  noImportVerifications: false,
   commit: false,
   infile: "",
+  outfile: "",
 },conf);
 
 
@@ -1047,10 +1049,13 @@ var transactions = [];
 
 var verificationSeries = 'A';
 var verificationNumber = 1;
+// used to detect if new verifications has been added
+var lastVerificationNumber;
 
 // grundboken
 var verifications = [];
 var verificationsIndex = {};
+
 
 /* -verifications
 {
@@ -1230,15 +1235,8 @@ function readBook(filename) {
       }
 
       validateBook();
+      lastVerificationNumber = verificationNumber;
 
-      /*
-      verifications.forEach(v => {
-	var regId = v.serie + v.regnr;
-	v.trans.forEach(t => {
-	  if(
-	});
-      });
-      */
       return resolve();
     });
   });
@@ -1327,8 +1325,10 @@ function addVerification(ver) {
       // find matching transaction in unbooked transactions
       var mt = findTransaction(t.transtext || ver.vertext, t.kontonr, t.belopp, t.transdat, t.transdat);
       if(mt) {
+	//debug("matching transaction found: ", json(mt));
 	return mt;
       } else {
+	//debug("matching transaction NOT found: ", json(t));
 	return t;
       }
       //var findTransaction(t)
@@ -1391,8 +1391,11 @@ function importVerification(data) {
       ret.belopp = fromNumber(t[ret.kontonr]);
     }
     ret.transdat = data.transdat || ver.verdatum;
-    if(data.transtext) {
-      ret.transtext = data.transtext;
+    if(t.transtext) {
+//      console.log("GOT TRANSTEXT: " + t.transtext);
+      ret.transtext = t.transtext;
+    } else {
+//      console.log("NO TRANSTEXT: ", t);
     }
     return ret;
   });
@@ -1496,22 +1499,22 @@ function findTransaction(reg, kontonr, belopp, dateFrom, dateTo) {
   //console.log("findTransaction, matcher: " + match.name);
 
   var res = transactions.filter(t => {
-    /*
+
     try {
       if(t.transtext && match(t.transtext)) {
-	console.log("findTransaction match t: ", t);
+	//console.log("findTransaction match t: ", t);
       } else {
-	console.log("findTransaction NO match t: ", reg, t.transtext);
+	//console.log("findTransaction NO match t: ", reg, t.transtext);
       }
     } catch(e) {
       console.log("testing matcher failed");
       process.exit(0);
     }
-    */
+
     return t.transtext && match(t.transtext) && equal(t.belopp, belopp) && t.transdat >= dateFrom && t.transdat <= dateTo;
   });
   if(res.length > 1) {
-    console.log("res matched: ", res);
+    //console.log("res matched: ", res);
     return false;
   } else {
     return res[0];
@@ -1535,7 +1538,6 @@ function autobook(t) {
 				      trans("2514", muldiv(t.belopp, skattesatser.särskildlöneskatt, 10000)),
 				      trans("7533", muldiv(neg(t.belopp), skattesatser.särskildlöneskatt, 10000))]});
   } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11099))) {
-    //console.log("autobook Länsförsäkringar pension" + JSON.stringify(t));
     let pension = fromNumber(10900.46);
     let forman = fromNumber(198.21);
     addVerification({ trans: [ t, trans("7412", pension),
@@ -1547,7 +1549,6 @@ function autobook(t) {
 			       trans("3740", fromNumber(0.33))
 			     ]});
   } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11167))) {
-    //console.log("autobook Länsförsäkringar pension" + JSON.stringify(t));
     let pension = fromNumber(10952.58);
     let forman = fromNumber(214.02);
     addVerification({ trans: [ t, trans("7412", pension),
@@ -1558,10 +1559,29 @@ function autobook(t) {
 			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(0.40))
 			     ]});
+  } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11239))) {
+    let pension = fromNumber(11009.54);
+    let forman = fromNumber(229.50);
+    addVerification({ trans: [ t, trans("7412", pension),
+			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
+			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
+			       trans("7389", forman),
+			       trans("2731", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("3740", fromNumber(-0.04))
+			     ]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-100))) {
+    addVerification({ trans: [ t, motkonto("6570")]});
+  } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-102))) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2518")]});
+  } else if(matchTransaction(t, /Arbetsgivaravgift/, "1630")) {
+    addVerification({ trans: [ t, motkonto("2731")]});
+  } else if(matchTransaction(t, /Avdragen skatt/, "1630")) {
+    addVerification({ trans: [ t, motkonto("2710")]});
+  } else if(matchTransaction(t, /Moms/, "1630")) {
+    addVerification({ trans: [ t, motkonto("2650")]});
   } else if(matchTransaction(t, /855-4546633/, "1930")) {
     addVerification({ trans: [ t,
 			       trans("6540", neg(t.belopp)),
@@ -1691,24 +1711,55 @@ var cmds = {
     });
 
   },
-  autobook: function() {
+  autobook: async function() {
     console.log("RUN autobook");
 //    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
-      console.log("transactions read, num: " + transactions.length);
+      //console.log("transactions read, num: " + transactions.length);
 
-      transactions.forEach(t => {
-	var ver = autobook(t);
-      });
-
-      dumpBook();
-
+    if(options.importVerifications) {
+      console.log("running importVerifications, transactions: " + transactions.length);
+      let verStat = await importVerifications();
+      console.log("verifications imported");
+    }
+    //console.log("check account: " + JSON.stringify(accounts['1730']));
+    if(options.autobook) {
+      console.log("run autobook");
       transactions.forEach(t => {
 	if(!t.registred) {
-	  console.log("unbooked transaction: " + JSON.stringify(t));
+	  var ver = autobook(t);
+	  if(ver) {
+	    console.log("autobooked: ", ver);
+	  }
+	}
+      });
+      console.log("autobook done");
+
+
+      console.log("dump unbooked transactions");
+      transactions.forEach(t => {
+	if(!t.registred) {
+	  //console.log("unbooked transaction: " + JSON.stringify(t));
+	  console.log(YAML.stringify({
+	    verdatum: formatDate(t.transdat, "-"),
+	    trans: [Object.assign({}, t, { belopp: 1*itoa(t.belopp) }) ]
+	  }) + '\n...\n');
 	}
       });
 
+    }
+
+//    transactions.forEach(t => {
+//      var ver = autobook(t);
 //    });
+
+//    dumpBook();
+
+//    transactions.forEach(t => {
+//      if(!t.registred) {
+//	console.log("unbooked transaction: " + JSON.stringify(t));
+//      }
+//    });
+
   },
   trans: function(kontonr) {
     console.log("konto: %s", kontonr);
@@ -2372,6 +2423,9 @@ if(options.noAutobook) {
   options.autobook = false;
 }
 
+if(options.noImportVerifications) {
+  options.importVerifications = false;
+}
 Object.assign(cmds, exports);
 
 // Remote access print eval loop
@@ -2389,45 +2443,23 @@ async function run() {
   //console.log("readBook: " + JSON.stringify(accounts['1730']));
   await safeReadJsonFile(options.transactionsFile, transactions);
   //console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
-  if(options.importVerifications) {
-    console.log("running importVerifications, transactions: " + transactions.length);
-    let verStat = await importVerifications();
-    console.log("verifications imported");
-  }
-  //console.log("check account: " + JSON.stringify(accounts['1730']));
-  if(options.autobook) {
-    console.log("run autobook");
-    transactions.forEach(t => {
-      if(!t.registred) {
-	var ver = autobook(t);
-	if(ver) {
-	  console.log("autobooked: ", ver);
-	}
-      }
-    });
-    console.log("autobook done");
-  }
 
   sortVerifications();
   sortTransactions();
 
   console.log("accounting init done, run command");
 
-  cmds[args[0]] ? cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
-  if(options.commit) {
-    await writeBook({ accountsList: accountsList, verifications: verifications }, options.accountingFile);
+  cmds[args[0]] ? await cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
+
+  if(lastVerificationNumber !== verificationsIndex) {
+    console.log("accounting has been updated");
+    if(options.commit) {
+      var outfile = options.outfile || options.accountingFile;
+      console.log("commit changes to %s", outfile);
+      await writeBook({ accountsList: accountsList, verifications: verifications }, outfile);
+    }
   }
 
-
-
-  if(options.autobook) {
-    console.log("dump unbooked transactions");
-    transactions.forEach(t => {
-      if(!t.registred) {
-	console.log("unbooked transaction: " + JSON.stringify(t));
-      }
-    });
-  }
   console.log("alldone, exit");
 };
 
