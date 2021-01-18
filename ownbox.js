@@ -7,6 +7,21 @@ const readline = require('readline');
 const fs = require('fs');
 const fsp = require('fs').promises;
 const stream = require('stream');
+const util = require('util');
+
+const finished  = (require('stream').promises || {}).finished ||
+      function(s) {
+	return new Promise((resolve, reject) => {
+	  s.on('finish', () => {
+	    return resolve();
+	  });
+
+	  s.on('error', (err) => {
+	    return reject(err);
+	  });
+	});
+      };
+
 const { promisify, inherits } = require('util');
 const YAML = require('yaml');
 const Iconv = require('iconv').Iconv;
@@ -39,8 +54,13 @@ var options = Object.assign({
   commit: false,
   infile: "",
   outfile: "",
+  dumpTransactions: false,
+  dumpAccounts: false,
+  dumpVerifications: false,
+  verboseDebug: ""
 },conf);
 
+var hushed = ("importSRUkoder").split(",").reduce( (a,v) => (a[v] = true,a), {});
 
 var finansialYearString;
 
@@ -63,7 +83,12 @@ function dasher(str) {
 
 Object.keys(options).forEach(k => { opts['--' + dasher(k)] = k; });
 
+var hushDebug = false;
+
 var debug = function debug() {
+  if(hushDebug) {
+    return;
+  }
   console.log.apply(this, arguments);
 }
 
@@ -546,6 +571,169 @@ function motkonto(kontonr) {
   };
 }
 
+
+// returns false if ok, string describing error if failed. Stops on first error
+// if verbose, all errors are printed on console and function returns true
+function validateAccountingData(verbose) {
+  var res = false;
+  function report() {
+    if(verbose) {
+      console.log.apply(this, arguments);
+      res = true;
+    } else {
+      throw util.format.apply(this, arguments);
+    }
+  }
+
+  try {
+
+  // check ingående balans
+  var tillgångar = zero();
+  accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
+    tillgångar = add(tillgångar, k.ib);
+  });
+  var skulder = zero();
+  accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
+    skulder = add(skulder, k.ib);
+  });
+
+
+  debug("ingående balans");
+  debug("tillgångar: " + itoa(tillgångar));
+  debug("skulder: " + itoa(skulder));
+
+  if(!equal(tillgångar,neg(skulder))) {
+    report("Ingående tillgångar och skulder balanserar inte!");
+  }
+
+  var konton = accountsList.reduce( (a, k) => {
+    var ktyp = basKontotyp(k.kontonr);
+    if(ktyp === 'T' || ktyp === 'S') {
+      a[k.kontonr] = k.ib;
+    } else {
+      a[k.kontonr] = zero();
+    }
+    return a;
+  }, {});
+
+  //console.log("Ingående balans på konton:\n", JSON.stringify(konton, null, 2));
+
+  var prevVerdatum = 0;
+
+  transactions.forEach(t => {
+    if(t.registred) {
+      var v;
+      if( (v = verificationsIndex[t.registred])) {
+	var vt = v.trans.find(vt => vt === t);
+	if(!vt) {
+	  report("transaktion felaktigt registrerad, transaktion saknas verifikation %s's trans lista !\nTRANS: %s\nVER: %s", t.registred, json(t), json(v) );
+	}
+      } else {
+	report("transaktion felaktigt registrerad, verifikation %s saknas!\nTRANS: %s", t.registred, json(t));
+      }
+
+    }
+  });
+
+  verifications.forEach(v => {
+    debug("validerar verifikation: ", json(v));
+    if(!validateVerification(v)) {
+      report("verifikation felaktig, balanserar inte");
+      report(JSON.stringify(v, null, 2));
+    }
+
+    if(!v.serie || !v.vernr) {
+      report("verifikation saknar regid: ");
+      report(JSON.stringify(v, null, 2));
+    }
+
+    if(!v.regdatum) {
+      report("verifikation saknar regdatum: ", v.serie+v.vernr);
+    }
+
+    if(!v.verdatum) {
+      report("verifikation saknar verdatum: ", v.serie+v.vernr);
+    } else if(v.verdatum < prevVerdatum) {
+      report("verifikation ligger i fel ordning: ", v.serie+v.vernr);
+    }
+
+    prevVerdatum = v.verdatum;
+
+    v.trans.forEach(t => {
+      if(typeof konton[t.kontonr] === 'undefined') {
+	report("invalid transaction, kontonr %s not in acccountsList", t.kontonr);
+      }
+      konton[t.kontonr] = add(konton[t.kontonr], t.belopp);
+      if(!t.transdat) {
+	report("transaktion saknar transaktionsdatum, ver %d, trans: %s ", v.serie+v.vernr, JSON.stringify(t));
+      }
+      if(!t.registred || t.registred !== (v.serie+v.vernr)) {
+	report("transaktion i verifikation %s har felaktigt registrerad verifikations id, trans: %s", v.serie+v.vernr, JSON.stringify(t));
+      }
+    });
+  });
+
+  Object.keys(konton).forEach(k => {
+    if(!equal(konton[k], accounts[k].saldo)) {
+      report("saldo på konto stämmer inte med verifikationer: ", k);
+      report("%s, %s", itoa(konton[k]), itoa(accounts[k].saldo));
+    };
+  });
+
+/*
+  tillgångar = zero();
+  skulder = zero();
+  intäkter = zero();
+  kostnader = zero();
+*/
+
+  var saldon = {
+    T: zero(),
+    S: zero(),
+    I: zero(),
+    K: zero()
+  };
+
+/*
+    var intäkter = zero();
+    var kostnader = zero();
+    accountsList.forEach(k => {
+    var ktyp = basKontotyp(k.kontonr);
+    });
+  */
+/*
+  accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
+    tillgångar = add(tillgångar, k.saldo);
+  });
+
+  accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
+    skulder = add(skulder, k.saldo);
+  });
+*/
+  accountsList.forEach(k => {
+    var typ = basKontotyp(k.kontonr);
+    saldon[typ] = add(saldon[typ], k.saldo);
+  });
+
+  debug("utgående balans:");
+  debug("tillgångar: " + itoa(saldon.T));
+  debug("skulder: " + itoa(saldon.S));
+  debug("utgående resultat:");
+  debug("intäkter: " + itoa(saldon.I));
+  debug("kostnader: " + itoa(saldon.K));
+
+  debug("balansdiff: ", itoa(add(saldon.T, saldon.S)));
+  debug("resultatdiff: ", itoa(add(saldon.I, saldon.K)));
+
+  if(!iszero(add(add(saldon.T, saldon.S),add(saldon.I, saldon.K)))) {
+    report("Utgående tillgångar och skulder balanserar inte med intäkter och kostnader!");
+  }
+  } catch(err) {
+    return err;
+  }
+  return res;
+}
+
 // check that all transactions are unique, e.g no duplicates and in order
 function validateTransactions(transactions) {
 
@@ -768,6 +956,9 @@ function findSRUcode(account) {
 function importSRUkoder(filename) {
   var slask = [];
 
+  var saveHush = hushDebug;
+  hushDebug = true;
+
   function parseSRU_Rule(rule) {
 
     var include = [];
@@ -897,6 +1088,7 @@ function importSRUkoder(filename) {
       console.log("srukoder done");
       //console.log("slask: ", slask);
       //Object.keys(basKontoplan).forEach(k => console.log(basKontoplan[k].kontonr + ": " + basKontoplan[k].kontonamn));
+      hushDebug = saveHush;
       return resolve();
     })).on('line', (line) => {
       //console.log("got line: " + line);
@@ -1036,6 +1228,9 @@ function addAccount(kontonr, kontonamn, kontotyp) {
 
 // imported transactions for autobooking
 var transactions = [];
+
+var transactionsChanged = false;
+
 /* -transactions
 {
   kontonr: "1510",
@@ -1100,7 +1295,6 @@ function writeBook(book, filename) {
   ws.close();
 
   return ws;
-
 }
 
 function readBook(filename) {
@@ -1242,6 +1436,21 @@ function readBook(filename) {
   });
 }
 
+function writeTransactions(filename) {
+  var ws = fs.createWriteStream(filename);
+  ws.on('finish', () => {
+    console.log("all data written");
+  });
+
+  transactions.forEach(t => {
+    ws.write(JSON.stringify(t) + '\n');
+  });
+
+  ws.end();
+
+  return finished(ws);
+}
+
 function readTransactions(filename) {
 
 }
@@ -1358,6 +1567,7 @@ function addVerification(ver) {
       accounts[t.kontonr].saldo = add(accounts[t.kontonr].saldo, t.belopp);
       //console.log("add transactions to account: ", accounts[t.kontonr]);
       accounts[t.kontonr].trans.push(t);
+      transactionsChanged = true;
     });
 
     appendVerification(ver);
@@ -1455,13 +1665,11 @@ function importYamlVerificationFile(filename) {
 
 
 async function importVerifications() {
-  console.log("importVerifications called");
+  console.log("import unbooked verifications from: %s", options.verifications);
 
   return new Promise( async (resolve,reject) => {
     var files = await fsp.readdir(options.verifications);
-
-//    fs.readdir(options.verifications, (err, files) => {
-      debug("importVerifications got files: ", files);
+    debug("importVerifications got files: ", files);
     for (const f of files) {
       if(!f.startsWith('.#') && f.endsWith(".yaml")) {
 	debug("import verification file: " + f);
@@ -1469,13 +1677,8 @@ async function importVerifications() {
 	debug("importVerifications, yaml file imported");
       }
     }
-
-//  });
-
-    console.log("importVerifications done");
-
+    console.log("import verifications done");
     return resolve();
-//    });
   });
 
 }
@@ -1595,12 +1798,38 @@ function autobook(t) {
   } else if(matchTransaction(t, /Skatteverket/, "1930")) {
     let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, addDays(t.transdat, 3))
     if(ts) {
-      console.log("found matching transation: " + JSON.stringify(ts));
+      //console.log("found matching transation: " + JSON.stringify(ts));
       addVerification({ trans: [ t, ts ]});
     }
   }
 }
 
+function autobookTransactions() {
+  console.log("run autobook on unbooked transactions: ", transactions.filter(t => !t.registred).length);
+  var numBooked = 0;
+  transactions.forEach(t => {
+    if(!t.registred) {
+      debug("autobook: ", json(t));
+      var ver = autobook(t);
+      if(ver) {
+	numBooked++;
+	debug("autobooked: ", ver);
+      }
+    }
+  });
+  console.log("autobook done, remaining unbooked transactions: "  + transactions.filter(t => !t.registred).length);
+}
+
+function dumpUnbookedTransactions() {
+  transactions.forEach(t => {
+    if(!t.registred) {
+      console.log(YAML.stringify({
+	verdatum: formatDate(t.transdat, "-"),
+	trans: [Object.assign({}, t, { belopp: 1*itoa(t.belopp) }) ]
+      }) + '\n...\n');
+    }
+  });
+}
 
 function readJsonStream(rs, array) {
   array = array || [];
@@ -1711,55 +1940,25 @@ var cmds = {
     });
 
   },
+  cleartransactions: function() {
+    var numCleared = 0;
+    transactions.forEach(t => {
+      if(t.registred) {
+	numCleared++;
+	delete t.registred;
+      }
+    });
+    if(numCleared > 0) {
+      transactionsChanged = true;
+      console.log("registred borttaget från %d transaktioner", numCleared);
+    }
+  },
   autobook: async function() {
-    console.log("RUN autobook");
-//    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
-      //console.log("transactions read, num: " + transactions.length);
-
-    if(options.importVerifications) {
-      console.log("running importVerifications, transactions: " + transactions.length);
-      let verStat = await importVerifications();
-      console.log("verifications imported");
-    }
-    //console.log("check account: " + JSON.stringify(accounts['1730']));
-    if(options.autobook) {
-      console.log("run autobook");
-      transactions.forEach(t => {
-	if(!t.registred) {
-	  var ver = autobook(t);
-	  if(ver) {
-	    console.log("autobooked: ", ver);
-	  }
-	}
-      });
-      console.log("autobook done");
-
-
-      console.log("dump unbooked transactions");
-      transactions.forEach(t => {
-	if(!t.registred) {
-	  //console.log("unbooked transaction: " + JSON.stringify(t));
-	  console.log(YAML.stringify({
-	    verdatum: formatDate(t.transdat, "-"),
-	    trans: [Object.assign({}, t, { belopp: 1*itoa(t.belopp) }) ]
-	  }) + '\n...\n');
-	}
-      });
-
-    }
-
-//    transactions.forEach(t => {
-//      var ver = autobook(t);
-//    });
-
-//    dumpBook();
-
-//    transactions.forEach(t => {
-//      if(!t.registred) {
-//	console.log("unbooked transaction: " + JSON.stringify(t));
-//      }
-//    });
-
+  },
+  awaitWrite: async function(filename) {
+    console.log("await write transactions");
+    await writeTransactions(filename);
+    console.log("writeTransactions finished");
   },
   trans: function(kontonr) {
     console.log("konto: %s", kontonr);
@@ -2061,6 +2260,9 @@ var cmds = {
 
   },
   validate: function() {
+    validateAccountingData(true);
+  },
+  xvalidate: function() {
     // check ingående balans
     var tillgångar = zero();
     accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
@@ -2091,7 +2293,23 @@ var cmds = {
 
     var prevVerdatum = 0;
 
+    transactions.forEach(t => {
+      if(t.registred) {
+	var v;
+	if( (v = verificationsIndex[t.registred])) {
+	  var vt = v.trans.find(vt => vt === t);
+	  if(!vt) {
+	    console.log("transaktion felaktigt registrerad, transaktion saknas verifikation %s's trans lista !\nTRANS: %s\nVER: %s", t.registred, json(t), json(v) );
+	  }
+	} else {
+	  console.log("transaktion felaktigt registrerad, verifikation %s saknas!\nTRANS: %s", t.registred, json(t));
+	}
+
+      }
+    });
+
     verifications.forEach(v => {
+      debug("validerar verifikation: ", json(v));
       if(!validateVerification(v)) {
 	console.log("verifikation felaktig, balanserar inte");
 	console.log(JSON.stringify(v, null, 2));
@@ -2109,7 +2327,7 @@ var cmds = {
       if(!v.verdatum) {
 	console.log("verifikation saknar verdatum: ", v.serie+v.vernr);
       } else if(v.verdatum < prevVerdatum) {
-	console.log("verifikation ligger i fel ordning: ", v.serie+v.vernr);
+	console.log("\nverifikation ligger i fel ordning: ", v.serie+v.vernr, "\n\n");
       }
 
       prevVerdatum = v.verdatum;
@@ -2428,11 +2646,6 @@ if(options.noImportVerifications) {
 }
 Object.assign(cmds, exports);
 
-// Remote access print eval loop
-if(options.repl) {
-  startRepl();
-}
-
 async function run() {
   await importBaskontoplan(options.baskontoplan);
   await importSRUkoder(options.srukoder);
@@ -2444,6 +2657,9 @@ async function run() {
   await safeReadJsonFile(options.transactionsFile, transactions);
   //console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
 
+  options.importVerifications && await importVerifications();
+  options.autobook && await autobookTransactions();
+
   sortVerifications();
   sortTransactions();
 
@@ -2451,12 +2667,33 @@ async function run() {
 
   cmds[args[0]] ? await cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
 
-  if(lastVerificationNumber !== verificationsIndex) {
-    console.log("accounting has been updated");
+  var validationError = validateAccountingData();
+
+  if(verificationNumber !== lastVerificationNumber) {
+    console.log("accounting ledger has been updated");
+    //debug("accounting has been updated: %d != %s", verificationNumber, lastVerificationNumber);
     if(options.commit) {
       var outfile = options.outfile || options.accountingFile;
       console.log("commit changes to %s", outfile);
-      await writeBook({ accountsList: accountsList, verifications: verifications }, outfile);
+      if(validationError) {
+	console.log("accounting file not written, acccoung data is erronous:\n", validationError);
+      } else {
+	await writeBook({ accountsList: accountsList, verifications: verifications }, outfile);
+      }
+    }
+  } else {
+    debug("accounting ledger has NOT changed: %d == %s", verificationNumber, lastVerificationNumber);
+  }
+
+  if(transactionsChanged) {
+    console.log("transactions has been updated");
+    if(options.commit) {
+      console.log("commit changes to %s", options.transactionsFile);
+      if(validationError) {
+	console.log("transactions file not written, accounting data is erronous:\n", validationError);
+      } else {
+	await writeTransactions(options.transactionsFile);
+      }
     }
   }
 
