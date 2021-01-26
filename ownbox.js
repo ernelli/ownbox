@@ -1547,6 +1547,10 @@ function addVerification(ver) {
       ver.verdatum = ver.trans[0].transdat || (new Date());
     }
 
+    if(!ver.vertext) {
+      ver.vertext = (ver.trans.find(t => !!t.transtext) || {}).transtext;
+    }
+    
     // always use current date as regdatum
     ver.regdatum = new Date();
 
@@ -1747,8 +1751,8 @@ function autobook(t) {
 			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
 			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
 			       trans("7389", forman),
-			       trans("2731", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
-			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("2731", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(0.33))
 			     ]});
   } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11167))) {
@@ -1758,8 +1762,8 @@ function autobook(t) {
 			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
 			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
 			       trans("7389", forman),
-			       trans("2731", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
-			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("2731", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(0.40))
 			     ]});
   } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11239))) {
@@ -1769,8 +1773,8 @@ function autobook(t) {
 			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
 			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
 			       trans("7389", forman),
-			       trans("2731", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
-			       trans("7512", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("2731", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(-0.04))
 			     ]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-100))) {
@@ -1966,7 +1970,7 @@ var cmds = {
     var table = [];
     console.log("--------------------");
     accounts[kontonr].trans.forEach(t => {
-      console.log("add transaction: ", t);
+      //console.log("add transaction: ", t);
       table.push({ datum: formatDate(t.transdat), belopp: itoa(t.belopp), beskrivning: t.transtext || ''})
     });
     table.length > 0 && printTable(table);
@@ -1974,12 +1978,37 @@ var cmds = {
     console.log("UB: %s", itoa(accounts[kontonr].saldo));
   },
 
-  sum: function(kontonr) {
+  sum: function(kontonr, to, from) {
     console.log(kontonr);
     console.log("-------");
     accounts[kontonr] && accounts[kontonr].trans.forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat),t.transtext || verificationsIndex[t.registred].vertext));
     console.log("-------");
     console.log(formatNumber(sumTransactions(accounts[kontonr].trans), 10));
+  },
+
+  saldo: function(kontonr, to, from) {
+
+    to = to && new Date(to);
+
+    from = from && new Date(to);
+
+    function filter(t) {
+      if(to && t.transdat > to) {
+	return false;
+      }
+
+      if(from && t.transdat < from) {
+	return false;
+      }
+      return true;
+    }
+
+    console.log(kontonr);
+    console.log("----------");
+    console.log(formatNumber(accounts[kontonr].ib || ZERO, 10), formatDate(startDate), "ingående balans");
+    accounts[kontonr] && accounts[kontonr].trans.filter(filter).forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat),t.transtext || verificationsIndex[t.registred].vertext || "..."));
+    console.log("----------");
+    console.log(formatNumber(add(accounts[kontonr].ib, sumTransactions(accounts[kontonr].trans.filter(filter))), 10));
   },
   arbetsgivaravgifter: function(month) {
 
@@ -2696,6 +2725,20 @@ async function run() {
       }
     }
   }
+
+  if(options.dumpTransactions) {
+      transactions.forEach(t => {
+	console.log(json(t));
+      });
+
+  }
+
+  if(options.dumpVerifications) {
+    verifications.forEach(v => {
+      console.log(json(v));
+    });
+  }
+
 
   console.log("alldone, exit");
 };
