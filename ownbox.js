@@ -85,11 +85,21 @@ Object.keys(options).forEach(k => { opts['--' + dasher(k)] = k; });
 
 var hushDebug = false;
 
-var debug = function debug() {
-  if(hushDebug) {
-    return;
+var debug = function() {
+  throw("debug logging not initialised");
+}
+
+function disableDebug() {
+  debug = function() {};
+}
+
+function enableDebug() {
+  debug = function debug() {
+    if(hushDebug) {
+      return;
+    }
+    console.log.apply(this, arguments);
   }
-  console.log.apply(this, arguments);
 }
 
 function json(o) {
@@ -454,6 +464,12 @@ function convertDate(d) {
   }
 }
 
+function checkDate(d) {
+  if(!d instanceof Date) {
+    console.log("Not a date: " + d);
+  }
+}
+
 function formatNumber(n, width) {
   return ("                    "+itoa(n)).slice(-width);
 }
@@ -468,7 +484,6 @@ function formatTime(d, separator) {
 
 function addDays(d, days) {
   return new Date(d).setDate(d.getDate() + days);
-  return d;
 }
 
 console.log("Räkenskapsår: " + options.räkenskapsår);
@@ -530,6 +545,22 @@ function setDates() {
   debug("finansialYearString: " + finansialYearString);
 }
 
+function dateRange(date, from, to) {
+  try {
+    if(from && date.getTime() < from.getTime()) {
+      return false;
+    }
+    
+    if(to && date.getTime() > to.getTime()) {
+      return false;
+    }
+  } catch(e) {
+    console.log("dateRange failed: ", ""+date, ""+from, ""+to);
+    return false;
+  }
+  return true;
+}
+
 function dateRangeFilter(from, to, field) {
   return function(t) {
     return t[field] >= from && t[field] < to;
@@ -587,147 +618,151 @@ function validateAccountingData(verbose) {
 
   try {
 
-  // check ingående balans
-  var tillgångar = zero();
-  accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
-    tillgångar = add(tillgångar, k.ib);
-  });
-  var skulder = zero();
-  accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
-    skulder = add(skulder, k.ib);
-  });
+    // check ingående balans
+    var tillgångar = zero();
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
+      tillgångar = add(tillgångar, k.ib);
+    });
+    var skulder = zero();
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
+      skulder = add(skulder, k.ib);
+    });
 
 
-  debug("ingående balans");
-  debug("tillgångar: " + itoa(tillgångar));
-  debug("skulder: " + itoa(skulder));
+    debug("ingående balans");
+    debug("tillgångar: " + itoa(tillgångar));
+    debug("skulder: " + itoa(skulder));
 
-  if(!equal(tillgångar,neg(skulder))) {
-    report("Ingående tillgångar och skulder balanserar inte!");
-  }
-
-  var konton = accountsList.reduce( (a, k) => {
-    var ktyp = basKontotyp(k.kontonr);
-    if(ktyp === 'T' || ktyp === 'S') {
-      a[k.kontonr] = k.ib;
-    } else {
-      a[k.kontonr] = zero();
+    if(!equal(tillgångar,neg(skulder))) {
+      report("Ingående tillgångar och skulder balanserar inte!");
     }
-    return a;
-  }, {});
 
-  //console.log("Ingående balans på konton:\n", JSON.stringify(konton, null, 2));
-
-  var prevVerdatum = 0;
-
-  transactions.forEach(t => {
-    if(t.registred) {
-      var v;
-      if( (v = verificationsIndex[t.registred])) {
-	var vt = v.trans.find(vt => vt === t);
-	if(!vt) {
-	  report("transaktion felaktigt registrerad, transaktion saknas verifikation %s's trans lista !\nTRANS: %s\nVER: %s", t.registred, json(t), json(v) );
-	}
+    var konton = accountsList.reduce( (a, k) => {
+      var ktyp = basKontotyp(k.kontonr);
+      if(ktyp === 'T' || ktyp === 'S') {
+	a[k.kontonr] = k.ib;
       } else {
-	report("transaktion felaktigt registrerad, verifikation %s saknas!\nTRANS: %s", t.registred, json(t));
+	a[k.kontonr] = zero();
       }
+      return a;
+    }, {});
 
-    }
-  });
+    //console.log("Ingående balans på konton:\n", JSON.stringify(konton, null, 2));
 
-  verifications.forEach(v => {
-    debug("validerar verifikation: ", json(v));
-    if(!validateVerification(v)) {
-      report("verifikation felaktig, balanserar inte");
-      report(JSON.stringify(v, null, 2));
-    }
+    var prevVerdatum = 0;
 
-    if(!v.serie || !v.vernr) {
-      report("verifikation saknar regid: ");
-      report(JSON.stringify(v, null, 2));
-    }
+    transactions.forEach(t => {
+      if(t.registred) {
+	var v;
+	if( (v = verificationsIndex[t.registred])) {
+	  var vt = v.trans.find(vt => vt === t);
+	  if(!vt) {
+	    report("transaktion felaktigt registrerad, transaktion saknas verifikation %s's trans lista !\nTRANS: %s\nVER: %s", t.registred, json(t), json(v) );
+	  }
+	} else {
+	  report("transaktion felaktigt registrerad, verifikation %s saknas!\nTRANS: %s", t.registred, json(t));
+	}
 
-    if(!v.regdatum) {
-      report("verifikation saknar regdatum: ", v.serie+v.vernr);
-    }
-
-    if(!v.verdatum) {
-      report("verifikation saknar verdatum: ", v.serie+v.vernr);
-    } else if(v.verdatum < prevVerdatum) {
-      report("verifikation ligger i fel ordning: ", v.serie+v.vernr);
-    }
-
-    prevVerdatum = v.verdatum;
-
-    v.trans.forEach(t => {
-      if(typeof konton[t.kontonr] === 'undefined') {
-	report("invalid transaction, kontonr %s not in acccountsList", t.kontonr);
-      }
-      konton[t.kontonr] = add(konton[t.kontonr], t.belopp);
-      if(!t.transdat) {
-	report("transaktion saknar transaktionsdatum, ver %d, trans: %s ", v.serie+v.vernr, JSON.stringify(t));
-      }
-      if(!t.registred || t.registred !== (v.serie+v.vernr)) {
-	report("transaktion i verifikation %s har felaktigt registrerad verifikations id, trans: %s", v.serie+v.vernr, JSON.stringify(t));
       }
     });
-  });
 
-  Object.keys(konton).forEach(k => {
-    if(!equal(konton[k], accounts[k].saldo)) {
-      report("saldo på konto stämmer inte med verifikationer: ", k);
-      report("%s, %s", itoa(konton[k]), itoa(accounts[k].saldo));
+    
+
+    verifications.forEach(v => {
+      debug("validerar verifikation: ", json(v));
+      if(!validateVerification(v)) {
+	report("verifikation felaktig, balanserar inte");
+	report(JSON.stringify(v, null, 2));
+      }
+
+      if(!v.serie || !v.vernr) {
+	report("verifikation saknar regid: ");
+	report(JSON.stringify(v, null, 2));
+      }
+
+      if(!v.regdatum) {
+	report("verifikation saknar regdatum: ", v.serie+v.vernr);
+      }
+
+      if(!v.verdatum) {
+	report("verifikation saknar verdatum: ", v.serie+v.vernr);
+      } else if(v.verdatum < prevVerdatum) {
+	report("verifikation ligger i fel ordning: ", v.serie+v.vernr);
+      }
+
+      prevVerdatum = v.verdatum;
+
+      v.trans.forEach(t => {
+	if(typeof konton[t.kontonr] === 'undefined') {
+	  report("invalid transaction, kontonr %s not in acccountsList", t.kontonr);
+	}
+	konton[t.kontonr] = add(konton[t.kontonr], t.belopp);
+	if(!t.transdat) {
+	  report("transaktion saknar transaktionsdatum, ver %d, trans: %s ", v.serie+v.vernr, JSON.stringify(t));
+	}
+	if(!t.registred || t.registred !== (v.serie+v.vernr)) {
+	  report("transaktion i verifikation %s har felaktigt registrerad verifikations id, trans: %s", v.serie+v.vernr, JSON.stringify(t));
+	}
+
+	//findTransaction(reg, kontonr, belopp, dateFrom, dateTo) {
+      });
+    });
+
+    Object.keys(konton).forEach(k => {
+      if(!equal(konton[k], accounts[k].saldo)) {
+	report("saldo på konto stämmer inte med verifikationer: ", k);
+	report("%s, %s", itoa(konton[k]), itoa(accounts[k].saldo));
+      };
+    });
+
+    /*
+      tillgångar = zero();
+      skulder = zero();
+      intäkter = zero();
+      kostnader = zero();
+    */
+
+    var saldon = {
+      T: zero(),
+      S: zero(),
+      I: zero(),
+      K: zero()
     };
-  });
 
-/*
-  tillgångar = zero();
-  skulder = zero();
-  intäkter = zero();
-  kostnader = zero();
-*/
+    /*
+      var intäkter = zero();
+      var kostnader = zero();
+      accountsList.forEach(k => {
+      var ktyp = basKontotyp(k.kontonr);
+      });
+    */
+    /*
+      accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
+      tillgångar = add(tillgångar, k.saldo);
+      });
 
-  var saldon = {
-    T: zero(),
-    S: zero(),
-    I: zero(),
-    K: zero()
-  };
-
-/*
-    var intäkter = zero();
-    var kostnader = zero();
+      accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
+      skulder = add(skulder, k.saldo);
+      });
+    */
     accountsList.forEach(k => {
-    var ktyp = basKontotyp(k.kontonr);
+      var typ = basKontotyp(k.kontonr);
+      saldon[typ] = add(saldon[typ], k.saldo);
     });
-  */
-/*
-  accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
-    tillgångar = add(tillgångar, k.saldo);
-  });
 
-  accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
-    skulder = add(skulder, k.saldo);
-  });
-*/
-  accountsList.forEach(k => {
-    var typ = basKontotyp(k.kontonr);
-    saldon[typ] = add(saldon[typ], k.saldo);
-  });
+    debug("utgående balans:");
+    debug("tillgångar: " + itoa(saldon.T));
+    debug("skulder: " + itoa(saldon.S));
+    debug("utgående resultat:");
+    debug("intäkter: " + itoa(saldon.I));
+    debug("kostnader: " + itoa(saldon.K));
 
-  debug("utgående balans:");
-  debug("tillgångar: " + itoa(saldon.T));
-  debug("skulder: " + itoa(saldon.S));
-  debug("utgående resultat:");
-  debug("intäkter: " + itoa(saldon.I));
-  debug("kostnader: " + itoa(saldon.K));
+    debug("balansdiff: ", itoa(add(saldon.T, saldon.S)));
+    debug("resultatdiff: ", itoa(add(saldon.I, saldon.K)));
 
-  debug("balansdiff: ", itoa(add(saldon.T, saldon.S)));
-  debug("resultatdiff: ", itoa(add(saldon.I, saldon.K)));
-
-  if(!iszero(add(add(saldon.T, saldon.S),add(saldon.I, saldon.K)))) {
-    report("Utgående tillgångar och skulder balanserar inte med intäkter och kostnader!");
-  }
+    if(!iszero(add(add(saldon.T, saldon.S),add(saldon.I, saldon.K)))) {
+      report("Utgående tillgångar och skulder balanserar inte med intäkter och kostnader!");
+    }
   } catch(err) {
     return err;
   }
@@ -1694,39 +1729,36 @@ function matchTransaction(t, reg, kontonr, belopp) {
   return (!reg || t.transtext.match(reg)) && (!kontonr || t.kontonr === kontonr) && (!belopp || t.belopp === belopp);
 }
 
-function findTransaction(reg, kontonr, belopp, dateFrom, dateTo) {
-  if(reg && kontonr && belopp && dateFrom && dateTo) {
+function filterTransactions(text, kontonr, belopp, dateFrom, dateTo) {
+  debug("filterTransactions called, [%s], [%s], [%s], [%s], [%s]", ""+text, kontonr, itoa(belopp), ""+dateFrom, ""+dateTo);
 
-  var match = (typeof reg === 'string') ?
-      function strmatcher(str) { return str === reg } :
-      function regmatcher(str) { return str.match(reg) };
+  var matchfunc;
 
-
-  //console.log("findTransaction: ", reg, kontonr, belopp, dateFrom, dateTo);
-  //console.log("findTransaction, matcher: " + match.name);
+  if(!text) {
+    matchfunc = function() { return true; };
+  } else {
+    matchfunc = (typeof text === 'string') ?
+      function strmatcher(str) { return str === text } :
+      function regmatcher(str) { return str && str.match(text) };
+  }
 
   var res = transactions.filter(t => {
-
-    try {
-      if(t.transtext && match(t.transtext)) {
-	//console.log("findTransaction match t: ", t);
-      } else {
-	//console.log("findTransaction NO match t: ", reg, t.transtext);
-      }
-    } catch(e) {
-      console.log("testing matcher failed");
-      process.exit(0);
+    if(t.kontonr === kontonr) {
+      debug("TRANS: " + json(t));
+      debug("matcher: text: %s, belopp: %s, daterange: %s", !!matchfunc(t.transtext), !!equal(t.belopp, belopp), !!dateRange(t.transdat, dateFrom, dateTo) );
     }
-
-    return t.transtext && match(t.transtext) && equal(t.belopp, belopp) && t.transdat >= dateFrom && t.transdat <= dateTo;
+    return matchfunc(t.transtext) && equal(t.belopp, belopp) && dateRange(t.transdat, dateFrom, dateTo);
   });
-  if(res.length > 1) {
-    //console.log("res matched: ", res);
-    return false;
+  return res;
+}
+
+function findTransaction(match, kontonr, belopp, dateFrom, dateTo) {
+  var res = filterTransactions(match, kontonr, belopp, dateFrom, dateTo);
+
+  if(res && res.length == 1) {
+      return res[0];
   } else {
-    return res[0];
-  }
-  } else {
+    console.log("res matched: ", res);
     return false;
   }
 }
@@ -1800,7 +1832,7 @@ function autobook(t) {
   } else if(matchTransaction(t, /Utdelning/, "1930")) {
     addVerification({ trans: [ t, motkonto("2898")]});
   } else if(matchTransaction(t, /Skatteverket/, "1930")) {
-    let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, addDays(t.transdat, 3))
+    let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, checkDate(addDays(t.transdat, 3)))
     if(ts) {
       //console.log("found matching transation: " + JSON.stringify(ts));
       addVerification({ trans: [ t, ts ]});
@@ -1880,11 +1912,6 @@ var cmds = {
   },
   itoa: function(num) {
     console.log("itoa: " + itoa(1*num));
-  },
-  findtrans: function(text, belopp, from, to) {
-    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
-      console.log("trans: ", findTransaction(new RegExp(text), fromNumber(1*belopp), new Date(from), new Date(to)));
-    });
   },
   yaml: function() {
     var ver = { "type": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
@@ -1977,7 +2004,22 @@ var cmds = {
     console.log("--------------------");
     console.log("UB: %s", itoa(accounts[kontonr].saldo));
   },
+  findtrans: function(text, kontonr, belopp, dateFrom, dateTo) {
+    //var trans = findTransaction(reg, kontonr, belopp, dateFrom, dateTo);
+    enableDebug();
+    var m;
+    if( (m=text.match(/\/(.*)\//))) {
+      text = new RegExp(m[1]);
+    }
 
+    var trans = findTransaction(text, kontonr, fromNumber(1*belopp), new Date(dateFrom), new Date(dateTo));
+    disableDebug();
+    if(trans) {
+      console.log("Found transaction: %s\%s", json(trans), YAML.stringify(trans));
+    } else {
+      console.log("transaction not found");
+    }
+  },
   sum: function(kontonr, to, from) {
     console.log(kontonr);
     console.log("-------");
@@ -2649,7 +2691,9 @@ verbose = options.verbose;
 interactive = options.interactive && !options.nonInteractive;
 
 if(!options.debug) {
-  debug = function() {};
+  disableDebug();
+} else {
+  enableDebug();
 }
 
 setDates();
