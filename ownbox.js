@@ -51,6 +51,7 @@ var options = Object.assign({
   noAutobook: false,
   importVerifications: true,
   noImportVerifications: false,
+  noAuto: false,
   commit: false,
   infile: "",
   outfile: "",
@@ -550,7 +551,7 @@ function dateRange(date, from, to) {
     if(from && date.getTime() < from.getTime()) {
       return false;
     }
-    
+
     if(to && date.getTime() > to.getTime()) {
       return false;
     }
@@ -666,8 +667,6 @@ function validateAccountingData(verbose) {
       }
     });
 
-    
-
     verifications.forEach(v => {
       debug("validerar verifikation: ", json(v));
       if(!validateVerification(v)) {
@@ -702,6 +701,8 @@ function validateAccountingData(verbose) {
 	}
 	if(!t.registred || t.registred !== (v.serie+v.vernr)) {
 	  report("transaktion i verifikation %s har felaktigt registrerad verifikations id, trans: %s", v.serie+v.vernr, JSON.stringify(t));
+	} else {
+	  //console.log("trans regged: " + json(t));
 	}
 
 	//findTransaction(reg, kontonr, belopp, dateFrom, dateTo) {
@@ -1585,7 +1586,7 @@ function addVerification(ver) {
     if(!ver.vertext) {
       ver.vertext = (ver.trans.find(t => !!t.transtext) || {}).transtext;
     }
-    
+
     // always use current date as regdatum
     ver.regdatum = new Date();
 
@@ -1743,10 +1744,12 @@ function filterTransactions(text, kontonr, belopp, dateFrom, dateTo) {
   }
 
   var res = transactions.filter(t => {
+/*
     if(t.kontonr === kontonr) {
       debug("TRANS: " + json(t));
       debug("matcher: text: %s, belopp: %s, daterange: %s", !!matchfunc(t.transtext), !!equal(t.belopp, belopp), !!dateRange(t.transdat, dateFrom, dateTo) );
     }
+*/
     return matchfunc(t.transtext) && equal(t.belopp, belopp) && dateRange(t.transdat, dateFrom, dateTo);
   });
   return res;
@@ -1758,7 +1761,7 @@ function findTransaction(match, kontonr, belopp, dateFrom, dateTo) {
   if(res && res.length == 1) {
       return res[0];
   } else {
-    console.log("res matched: ", res);
+    //console.log("res matched: ", res);
     return false;
   }
 }
@@ -1964,10 +1967,6 @@ var cmds = {
 
       console.log("test SRU code for 1510: ", findSRUcode("1510"));
       console.log("test SRU code for 1930: ", findSRUcode("1930"));
-
-
-
-
     });
 
   },
@@ -1991,6 +1990,16 @@ var cmds = {
     await writeTransactions(filename);
     console.log("writeTransactions finished");
   },
+
+
+  ver: function(regid) {
+    var ver = verificationsIndex[regid];
+
+    if(ver) {
+      console.log(YAML.stringify(ver));
+    }
+
+  },
   trans: function(kontonr) {
     console.log("konto: %s", kontonr);
     console.log("IB: %s", itoa(accounts[kontonr].ib));
@@ -1998,7 +2007,7 @@ var cmds = {
     console.log("--------------------");
     accounts[kontonr].trans.forEach(t => {
       //console.log("add transaction: ", t);
-      table.push({ datum: formatDate(t.transdat), belopp: itoa(t.belopp), beskrivning: t.transtext || ''})
+      table.push({ datum: formatDate(t.transdat), belopp: formatNumber(t.belopp, 10), beskrivning: t.transtext || '', regid: t.registred });
     });
     table.length > 0 && printTable(table);
     console.log("--------------------");
@@ -2451,6 +2460,7 @@ var cmds = {
   book: function() {
 
   },
+/*
   verifications: async function () {
     await importVerifications();
     console.log("verifications imported");
@@ -2479,6 +2489,7 @@ vertext: Inbetalning faktura 45
     dumpBook();
 
   },
+*/
 /*
   seb: function(infile, outfile) {
     var transactions = [];
@@ -2710,11 +2721,11 @@ if(verbose) {
   console.log("run command: " + ('<' + args[0] + '>' || "<none>") + ", using options: " + JSON.stringify(options, null, 2));
 }
 
-if(options.noAutobook) {
+if(options.noAuto || options.noAutobook) {
   options.autobook = false;
 }
 
-if(options.noImportVerifications) {
+if(options.noAuto || options.noImportVerifications) {
   options.importVerifications = false;
 }
 Object.assign(cmds, exports);
