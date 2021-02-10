@@ -58,6 +58,7 @@ var options = Object.assign({
   dumpTransactions: false,
   dumpAccounts: false,
   dumpVerifications: false,
+  dumpUnbooked: false,
   verboseDebug: ""
 },conf);
 
@@ -475,6 +476,11 @@ function formatNumber(n, width) {
   return ("                    "+itoa(n)).slice(-width);
 }
 
+function pad(s, width) {
+  return ("                    "+s).slice(-width);
+}
+
+
 function formatDate(d, separator) {
   return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
 }
@@ -484,7 +490,9 @@ function formatTime(d, separator) {
 }
 
 function addDays(d, days) {
-  return new Date(d).setDate(d.getDate() + days);
+  var d =  new Date(d)
+  d.setDate(d.getDate() + days);
+  return d;
 }
 
 console.log("Räkenskapsår: " + options.räkenskapsår);
@@ -556,7 +564,7 @@ function dateRange(date, from, to) {
       return false;
     }
   } catch(e) {
-    console.log("dateRange failed: ", ""+date, ""+from, ""+to);
+    console.log("dateRange failed: ", "date: "+date, "from: "+from, "to: "+to);
     return false;
   }
   return true;
@@ -881,6 +889,12 @@ function sumTransactions(trans) {
   var sum = atoi("0");
   trans.forEach(t => { sum = add(sum, t.belopp); });
   return sum;
+}
+
+function saldo(account, date) {
+  return add(isBalanskonto(account) ? accounts[account].ib : zero(), sumTransactions(accounts[account].trans.filter(t => {
+    return dateRange(t.transdat, false, date)
+  })));
 }
 
 function sumPeriod(account, period) {
@@ -1249,8 +1263,8 @@ function addAccount(kontonr, kontonamn, kontotyp) {
     kontonr: kontonr,
     kontonamn: kontonamn || basKontoplan[kontonr].kontonamn,
     kontotyp: kontotyp || basKontotyp(kontonr),
-    ib: ZERO,
-    saldo: ZERO,
+    ib: zero(),
+    saldo: zero(),
     trans: [],
   };
 
@@ -1587,8 +1601,10 @@ function addVerification(ver) {
       ver.vertext = (ver.trans.find(t => !!t.transtext) || {}).transtext;
     }
 
-    // always use current date as regdatum
-    ver.regdatum = new Date();
+    if(!ver.regdatum) {
+      // use current date as regdatum
+      ver.regdatum = new Date();
+    }
 
     ver.serie = verificationSeries;
     ver.vernr = verificationNumber++;
@@ -1819,6 +1835,7 @@ function autobook(t) {
   } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2518")]});
   } else if(matchTransaction(t, /Arbetsgivaravgift/, "1630")) {
+    //var saldo = saldo("2731", addDays(t.transdat, -t.transdat.getDate()));
     addVerification({ trans: [ t, motkonto("2731")]});
   } else if(matchTransaction(t, /Avdragen skatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2710")]});
@@ -1835,9 +1852,9 @@ function autobook(t) {
   } else if(matchTransaction(t, /Utdelning/, "1930")) {
     addVerification({ trans: [ t, motkonto("2898")]});
   } else if(matchTransaction(t, /Skatteverket/, "1930")) {
-    let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, checkDate(addDays(t.transdat, 3)))
+    let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, addDays(t.transdat, 3));
     if(ts) {
-      //console.log("found matching transation: " + JSON.stringify(ts));
+      console.log("Inbetalning bokförd, found matching transation: " + JSON.stringify(ts));
       addVerification({ trans: [ t, ts ]});
     }
   }
@@ -1915,6 +1932,13 @@ var cmds = {
   },
   itoa: function(num) {
     console.log("itoa: " + itoa(1*num));
+  },
+  prevmonth: function(date) {
+    date = (date && new Date(date)) || new Date();
+
+    var prev = addDays(date, -date.getDate());
+
+    console.log("%s -> %s", formatDate(date), formatDate(prev));
   },
   yaml: function() {
     var ver = { "type": "VER", "serie": "A", "vernr": "1",   "verdatum": "2020-07-01",  "vertext": "Inbetalning faktura 45",  "regdatum": "2020-08-13", trans: [ { "kontonr": "1510",  "objekt": [],  "belopp": -111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }, { "kontonr": "1910",  "objekt": [],  "belopp": +111800,  "transdat": "2020-07-01",  "transtext": "Inbetalning faktura 45" }]};
@@ -2029,14 +2053,30 @@ var cmds = {
       console.log("transaction not found");
     }
   },
-  sum: function(kontonr, to, from) {
+  sum: function(kontonr, from, to) {
+    var trans = (accounts[kontonr] && accounts[kontonr].trans.filter(t => dateRange(t.transdat, from && new Date(from), to && new Date(to)))) || [];
+
     console.log(kontonr);
-    console.log("-------");
-    accounts[kontonr] && accounts[kontonr].trans.forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat),t.transtext || verificationsIndex[t.registred].vertext));
-    console.log("-------");
-    console.log(formatNumber(sumTransactions(accounts[kontonr].trans), 10));
+    console.log("----------");
+    trans.forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat), pad(t.registred, 4), t.transtext || verificationsIndex[t.registred].vertext || verificationsIndex[t.registred].vertext || "..."));
+    console.log("----------");
+    console.log(formatNumber(sumTransactions(trans), 10));
   },
 
+  saldo: function(kontonr, date) {
+    date = new Date(date || Date.now());
+    console.log(kontonr);
+    console.log("-------");
+    console.log(formatNumber(accounts[kontonr].ib || ZERO, 10), formatDate(startDate), "Ingående balans");
+    accounts[kontonr] && accounts[kontonr].trans.filter(t => dateRange(t.transdat, false, date)).forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat), pad(t.registred, 4), t.transtext || verificationsIndex[t.registred].vertext || "..."));
+    console.log("-------");
+    console.log(formatNumber(saldo(kontonr, date), 10));
+
+    //console.log(formatNumber( add( accounts[kontonr].ib ,sumTransactions(accounts[kontonr].trans.filter(t => {
+    //  return dateRange(t.transdat, false, date)
+    //}))), 10));
+  },
+  /*
   saldo: function(kontonr, to, from) {
 
     to = to && new Date(to);
@@ -2056,11 +2096,12 @@ var cmds = {
 
     console.log(kontonr);
     console.log("----------");
-    console.log(formatNumber(accounts[kontonr].ib || ZERO, 10), formatDate(startDate), "ingående balans");
+    console.log(formatNumber(accounts[kontonr].ib || ZERO, 10), formatDate(startDate), "Ingående balans");
     accounts[kontonr] && accounts[kontonr].trans.filter(filter).forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat),t.transtext || verificationsIndex[t.registred].vertext || "..."));
     console.log("----------");
     console.log(formatNumber(add(accounts[kontonr].ib, sumTransactions(accounts[kontonr].trans.filter(filter))), 10));
   },
+*/
   arbetsgivaravgifter: function(month) {
 
 
@@ -2730,6 +2771,9 @@ if(options.noAuto || options.noImportVerifications) {
 }
 Object.assign(cmds, exports);
 
+function alldone() {
+}
+
 async function run() {
   await importBaskontoplan(options.baskontoplan);
   await importSRUkoder(options.srukoder);
@@ -2786,6 +2830,10 @@ async function run() {
 	console.log(json(t));
       });
 
+  } else if(options.dumpUnbooked) {
+    transactions.filter(t=> !t.registred).forEach(t => {
+      console.log(json(t));
+    });
   }
 
   if(options.dumpVerifications) {
@@ -2793,7 +2841,6 @@ async function run() {
       console.log(json(v));
     });
   }
-
 
   console.log("alldone, exit");
 };
