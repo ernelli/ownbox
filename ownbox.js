@@ -1835,8 +1835,21 @@ function autobook(t) {
   } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2518")]});
   } else if(matchTransaction(t, /Arbetsgivaravgift/, "1630")) {
-    //var saldo = saldo("2731", addDays(t.transdat, -t.transdat.getDate()));
-    addVerification({ trans: [ t, motkonto("2731")]});
+//    console.log("arbetsgivaravgift dragen: %s", formatDate(t.transdat));
+    var saldoPeriod = saldo("2731", addDays(t.transdat, -t.transdat.getDate()));
+    var inbetalt = t.belopp;
+    var diff = abs(sub(saldoPeriod, inbetalt));
+/*
+    console.log("periodsaldo: %s, inbetalt: %s", itoa(saldoPeriod), itoa(inbetalt));
+    console.log("öresdiff: ", itoa(sub(saldoPeriod, inbetalt)));
+    console.log("compare: %s - %s, %d", diff, fromNumber(1.0), compare(diff, fromNumber(1.0)));
+*/
+    if(compare(diff, fromNumber(1.0)) < 1) {
+//      console.log("avrunda: ", itoa(sub(saldoPeriod, inbetalt)));
+      addVerification({ trans: [ t, trans("2731", neg(saldoPeriod)), motkonto("3740")]});
+    } else {
+      addVerification({ trans: [ t, motkonto("2731")]});
+    }
   } else if(matchTransaction(t, /Avdragen skatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2710")]});
   } else if(matchTransaction(t, /Moms/, "1630")) {
@@ -1854,7 +1867,7 @@ function autobook(t) {
   } else if(matchTransaction(t, /Skatteverket/, "1930")) {
     let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, addDays(t.transdat, 3));
     if(ts) {
-      console.log("Inbetalning bokförd, found matching transation: " + JSON.stringify(ts));
+      //console.log("Inbetalning bokförd, found matching transation: " + JSON.stringify(ts));
       addVerification({ trans: [ t, ts ]});
     }
   }
