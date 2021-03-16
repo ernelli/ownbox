@@ -660,8 +660,16 @@ function validateAccountingData(verbose) {
 
     var prevVerdatum = 0;
 
+    var dupCheck = new Set();
+
     transactions.forEach(t => {
       if(t.registred) {
+	if(dupCheck.has(t)) {
+	  report("transaktion felaktigt registrerad, transaktion förekommer två gånger i verfikationer");
+	} else {
+	  dupCheck.add(t);
+	}
+
 	var v;
 	if( (v = verificationsIndex[t.registred])) {
 	  var vt = v.trans.find(vt => vt === t);
@@ -699,7 +707,15 @@ function validateAccountingData(verbose) {
 
       prevVerdatum = v.verdatum;
 
+      var dup = new Set();
+
       v.trans.forEach(t => {
+	if(dup.has(t)) {
+	  report("transaktion %s i verifikation %s förekommer två ggr", json(t), v.serie+v.vernr);
+	} else {
+	  dup.add(t);
+	}
+
 	if(typeof konton[t.kontonr] === 'undefined') {
 	  report("invalid transaction, kontonr %s not in acccountsList", t.kontonr);
 	}
@@ -1554,7 +1570,7 @@ function appendVerification(ver) {
 }
 
 
-function addVerification(ver) {
+function addVerification(ver, check) {
   // check if autobalance/motkonto exists
 
   try {
@@ -1584,7 +1600,7 @@ function addVerification(ver) {
       // find matching transaction in unbooked transactions
       var mt = findTransaction(t.transtext || ver.vertext, t.kontonr, t.belopp, t.transdat, t.transdat);
       if(mt) {
-	//debug("matching transaction found: ", json(mt));
+	//console.log("matching transaction found for %s: ", t.kontonr, json(mt));
 	return mt;
       } else {
 	//debug("matching transaction NOT found: ", json(t));
@@ -1625,8 +1641,9 @@ function addVerification(ver) {
       accounts[t.kontonr].trans.push(t);
       transactionsChanged = true;
     });
-
     appendVerification(ver);
+
+    return ver;
   } catch(e) {
     console.log("Failed to add verification:\n", JSON.stringify(ver, null, 2));
     console.log("error: ", e);
@@ -1766,7 +1783,7 @@ function filterTransactions(text, kontonr, belopp, dateFrom, dateTo) {
       debug("matcher: text: %s, belopp: %s, daterange: %s", !!matchfunc(t.transtext), !!equal(t.belopp, belopp), !!dateRange(t.transdat, dateFrom, dateTo) );
     }
 */
-    return matchfunc(t.transtext) && equal(t.belopp, belopp) && dateRange(t.transdat, dateFrom, dateTo);
+    return matchfunc(t.transtext) && equal(t.belopp, belopp) && t.kontonr === kontonr && dateRange(t.transdat, dateFrom, dateTo);
   });
   return res;
 }
@@ -1854,14 +1871,34 @@ function autobook(t) {
     addVerification({ trans: [ t, motkonto("2710")]});
   } else if(matchTransaction(t, /Moms/, "1630")) {
     addVerification({ trans: [ t, motkonto("2650")]});
-  } else if(matchTransaction(t, /855-4546633/, "1930")) {
-    addVerification({ trans: [ t,
+  } else if(matchTransaction(t, /855-4546633/, "1930") || matchTransaction(t, /8554546633/, "1930")) {
+    var ver = addVerification({ trans: [ t,
 			       trans("6540", neg(t.belopp)),
 			       trans("4531", neg(t.belopp)),
 			       trans("4599", t.belopp),
 			       trans("2614", muldiv(t.belopp, skattesatser.moms, 10000)),
 			       trans("2645", neg(muldiv(t.belopp, skattesatser.moms, 10000))),
-			     ]});
+				       ]}, true);
+
+/*
+    var dup = new Set();
+    ver.trans.forEach(t => (dup.has(t) && console.log("DUPLICATE: ", t)) || (dup.add(t)) );
+
+
+    console.log("added verification: " + (verificationNumber - 1), ver.serie+ver.vernr);
+    ver.trans.forEach(t => console.log(json(t)));
+
+    console.log("ARRAY: ", [ t,
+			       trans("6540", neg(t.belopp)),
+			       trans("4531", neg(t.belopp)),
+			       trans("4599", t.belopp),
+			       trans("2614", muldiv(t.belopp, skattesatser.moms, 10000)),
+			       trans("2645", neg(muldiv(t.belopp, skattesatser.moms, 10000))),
+			   ]);
+
+    console.log("ARRAY2: ", ver.trans);
+*/
+
   } else if(matchTransaction(t, /Utdelning/, "1930")) {
     addVerification({ trans: [ t, motkonto("2898")]});
   } else if(matchTransaction(t, /Skatteverket/, "1930")) {
@@ -2033,7 +2070,11 @@ var cmds = {
     var ver = verificationsIndex[regid];
 
     if(ver) {
-      console.log(YAML.stringify(ver));
+      //console.log(YAML.stringify(ver.trans));
+      //console.log(json(ver));
+      ver.trans.forEach(t => {
+	console.log(json(t));
+      });
     }
 
   },
@@ -2074,6 +2115,7 @@ var cmds = {
     trans.forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat), pad(t.registred, 4), t.transtext || verificationsIndex[t.registred].vertext || verificationsIndex[t.registred].vertext || "..."));
     console.log("----------");
     console.log(formatNumber(sumTransactions(trans), 10));
+
   },
 
   saldo: function(kontonr, date) {
@@ -2085,7 +2127,7 @@ var cmds = {
     console.log("-------");
     console.log(formatNumber(saldo(kontonr, date), 10));
 
-    //console.log(formatNumber( add( accounts[kontonr].ib ,sumTransactions(accounts[kontonr].trans.filter(t => {
+  //console.log(formatNumber( add( accounts[kontonr].ib ,sumTransactions(accounts[kontonr].trans.filter(t => {
     //  return dateRange(t.transdat, false, date)
     //}))), 10));
   },
