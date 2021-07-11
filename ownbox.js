@@ -58,7 +58,7 @@ var options = Object.assign({
   dumpTransactions: false,
   dumpAccounts: false,
   dumpVerifications: false,
-  dumpUnbooked: false,
+  dumpUnbooked: true,
   verboseDebug: ""
 },conf);
 
@@ -947,6 +947,52 @@ function sortVerifications() {
       return (a.serie+a.vernr) > (b.serie+b.vernr) ? 1 : -1;
     }
   });
+}
+
+function renumberVerificationsFrom(vernr) {
+  console.log("renumberVerificationsFrom from vernr: " + vernr);
+
+  var renumVerifications = verifications.filter(v => v.vernr >= vernr);
+
+  renumVerifications.sort( (a,b) => a.vernr - b.vernr);
+
+  if(renumVerifications.some( (e,i,a) => i > 0 ? (a[i].vernr - a[i-1].vernr !== 1) : false) ) {
+    console.log("renumber verifications failed, vernr not a complete sequence");
+    return false;
+  }
+
+  if(!verifications.filter(v => v.vernr >= vernr).every(v => {
+    var oldRegid = v.serie + v.vernr;
+
+    if(v.trans.some(t => t.registred !== oldRegid)) {
+      console.log("renumber verifications failed, transactions not correctly registred: ", json(v));
+      return false;
+    }
+
+    v.vernr = vernr++;
+    var newRegid = v.serie + v.vernr;
+
+    v.trans.forEach(t => {
+	t.registred = newRegid;
+    });
+
+    verificationsIndex[newRegid] = v;
+
+    return true;
+  })) {
+    return false;
+  }
+
+  renumVerifications.sort( (a,b) => a.vernr - b.vernr);
+
+  if(renumVerifications.some( (e,i,a) => i > 0 ? (a[i].verdatum < a[i-1].verdatum) : false) ) {
+    console.log("verifications verdatum out of order");
+    return false;
+  }
+
+  console.log("verifications renumbered");
+
+  return true;
 }
 
 function sortTransactions() {
@@ -2840,11 +2886,18 @@ async function run() {
   await safeReadJsonFile(options.transactionsFile, transactions);
   //console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
 
+  var firstAddedVernr = verificationNumber;
+
   options.importVerifications && await importVerifications();
   options.autobook && await autobookTransactions();
 
+  // at this point, all added verifications are unsorted, a.g A3 can be last and A100 first, which is confusing
+  // so after all verifications has been sorted, renumber all above last commited verId
+
   sortVerifications();
   sortTransactions();
+
+  renumberVerificationsFrom(firstAddedVernr);
 
   console.log("accounting init done, run command");
 

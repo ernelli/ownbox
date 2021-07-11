@@ -35,6 +35,7 @@ done
 #cp Kontohändelser* ~/Download
 
 BASENAME=Kontohändelser
+#BASENAME=download
 
 echo "-------- DO SEBFILES -------------"
 
