@@ -186,7 +186,7 @@ function mul(a,b) {
 }
 
 function div(a,b) {
-  a = a / b;
+  a = Math.floor(a / b);
   return a;
 }
 
@@ -212,6 +212,10 @@ function equal(a,b) {
 
 function fromNumber(n) {
   return Math.round(n*100);
+}
+
+function floor(num) {
+  return num - num % 100;
 }
 
 function iszero(num) {
@@ -1029,6 +1033,18 @@ function isBalanskonto(kontonr) {
   } else {
     return false;
   }
+}
+
+function sumAccounts(filter) {
+  var sum = zero();
+  accountsList.filter(filter).forEach(k => {
+    sum = add(sum, k.saldo);
+  });
+  return sum;
+}
+
+function sumAccountsType(type) {
+  return sumAccounts( (k) => basKontotyp(k.kontonr) === type );
 }
 
 function findSRUcode(account) {
@@ -2307,7 +2323,7 @@ var cmds = {
 
     rapport = [];
 
-    var kostnader = 0;
+    var kostnader = zero();
     accountsList.filter(k => basKontotyp(k.kontonr) === 'K').forEach(k => {
       rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
       kostnader = add(kostnader, k.saldo);
@@ -2317,6 +2333,15 @@ var cmds = {
     console.log("------------------------------------------");
     console.log("summa: " + itoa(kostnader));
     console.log("\nRörelseresultat: " + itoa(neg(add(kostnader, intäkter))));
+  },
+  bokslut: function () {
+    var resultat = neg(add(sumAccountsType('K'), sumAccountsType('I') ));
+    var skatt = floor(muldiv(mul(fromNumber(10),div(resultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+    console.log("Årets resultat: " + itoa(resultat));
+    console.log("Årets skatt: " + itoa(skatt));
+    var åretsresultat = sub(resultat, skatt);
+    addVerification({ verdatum: endPrintDate ,vertext: "Årets resultat", trans: [ trans("8999", åretsresultat), trans("2099", neg(åretsresultat)) ] });
+    addVerification({ verdatum: endPrintDate, vertext: "Skatt på årets resultat", trans: [ trans("8910", skatt), trans("2512", neg(skatt)) ] });
   },
   deklaration: function() {
 
