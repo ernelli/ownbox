@@ -624,6 +624,7 @@ function validateAccountingData(verbose) {
     if(verbose) {
       console.log.apply(this, arguments);
       res = true;
+      console.log("----------------------------------------");
     } else {
       throw util.format.apply(this, arguments);
     }
@@ -678,7 +679,7 @@ function validateAccountingData(verbose) {
 	if( (v = verificationsIndex[t.registred])) {
 	  var vt = v.trans.find(vt => vt === t);
 	  if(!vt) {
-	    report("transaktion felaktigt registrerad, transaktion saknas verifikation %s's trans lista !\nTRANS: %s\nVER: %s", t.registred, json(t), json(v) );
+	    report("transaktion felaktigt registrerad, transaktion saknas i verifikation %s's trans lista !\nTRANS: %s\nVER: %s", t.registred, json(t), json(v) );
 	  }
 	} else {
 	  report("transaktion felaktigt registrerad, verifikation %s saknas!\nTRANS: %s", t.registred, json(t));
@@ -1355,6 +1356,9 @@ function addAccount(kontonr, kontonamn, kontotyp) {
 }
 
 // imported transactions for autobooking
+var importedTransactions = [];
+
+// all transactions in registred verifications
 var transactions = [];
 
 var transactionsChanged = false;
@@ -2340,8 +2344,9 @@ var cmds = {
     console.log("Årets resultat: " + itoa(resultat));
     console.log("Årets skatt: " + itoa(skatt));
     var åretsresultat = sub(resultat, skatt);
-    addVerification({ verdatum: endPrintDate ,vertext: "Årets resultat", trans: [ trans("8999", åretsresultat), trans("2099", neg(åretsresultat)) ] });
-    addVerification({ verdatum: endPrintDate, vertext: "Skatt på årets resultat", trans: [ trans("8910", skatt), trans("2512", neg(skatt)) ] });
+    // crude hack, set verdatum as string
+    addVerification({ verdatum: new Date(formatDate(endPrintDate)) ,vertext: "Årets resultat", trans: [ trans("8999", åretsresultat), trans("2099", neg(åretsresultat)) ] });
+    addVerification({ verdatum: new Date(formatDate(endPrintDate)), vertext: "Skatt på årets resultat", trans: [ trans("8910", skatt), trans("2512", neg(skatt)) ] });
   },
   deklaration: function() {
 
@@ -2909,6 +2914,23 @@ async function run() {
 
   //console.log("readBook: " + JSON.stringify(accounts['1730']));
   await safeReadJsonFile(options.transactionsFile, transactions);
+
+  transactions = transactions.map(t => {
+    if(t.registred) {
+      //console.log("remap registred imported transaction: " + t.registred);
+      var ver = verificationsIndex[t.registred];
+      var mt = ver.trans.find(vt => isTransactionsEqual(vt, t));
+      if(mt) {
+	//console.log("found matching transaction, remap");
+	return mt;
+      } else {
+	console.log("matching transaction for %s not found", json(t));
+      }
+    } else {
+      return t;
+    }
+  });
+
   //console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
 
   var firstAddedVernr = verificationNumber;
