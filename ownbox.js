@@ -58,8 +58,9 @@ var options = Object.assign({
   dumpTransactions: false,
   dumpAccounts: false,
   dumpVerifications: false,
-  dumpUnbooked: true,
-  verboseDebug: ""
+  dumpUnbooked: false,
+  verboseDebug: "",
+  validate: false,
 },conf);
 
 var hushed = ("importSRUkoder").split(",").reduce( (a,v) => (a[v] = true,a), {});
@@ -460,7 +461,7 @@ function printTable(arr) {
 
 function convertDate(d) {
   if(typeof d === 'string') {
-    return new Date(d);
+    return new Date(formatDate(new Date(d)));
   } else if(d instanceof Date) {
     return d;
   } else if(typeof d === 'number') {
@@ -584,6 +585,17 @@ function isTransactionsEqual(a, b) {
   var res = 1*a.transdat === 1*b.transdat &&
     a.belopp === b.belopp &&
     a.transtext === b.transtext &&
+    a.kontonr === b.kontonr;
+
+  //console.log("EQUAL: " + JSON.stringify(a) + ", " + JSON.stringify(b) + " => " + res);
+
+  return res;
+}
+
+function isTransactionsSimilar(a, b) {
+  var res = Math.abs(1*a.transdat - 1*b.transdat) <= 25*3600*1000 &&
+    a.belopp === b.belopp &&
+      (  (!a.transtext || !b.transtext) || a.transtext === b.transtext) &&
     a.kontonr === b.kontonr;
 
   //console.log("EQUAL: " + JSON.stringify(a) + ", " + JSON.stringify(b) + " => " + res);
@@ -1491,7 +1503,6 @@ function readBook(filename) {
 	  obj.verdatum = convertDate(obj.verdatum);
 	  obj.regdatum = convertDate(obj.regdatum);
 
-	  //verifications.push(obj);
 	  appendVerification(obj);
 
 	  if(!obj.serie || !obj.vernr) {
@@ -1500,7 +1511,7 @@ function readBook(filename) {
 
 	  var regId = obj.serie + obj.vernr;
 
-	  verificationNumber = obj.vernr + 1;
+	  verificationNumber = Math.max(obj.vernr + 1, verificationNumber);
 
 	  obj.trans.forEach(t => {
 	    if(t.registred !== regId) {
@@ -1587,6 +1598,25 @@ function readTransactions(filename) {
 
 }
 
+function remapTransactions() {
+  transactions = transactions.map(t => {
+    if(t.registred) {
+      //console.log("remap registred imported transaction: " + t.registred);
+      var ver = verificationsIndex[t.registred];
+      var mt = ver.trans.find(vt => isTransactionsEqual(vt, t));
+      if(mt) {
+	//console.log("found matching transaction, remap");
+	return mt;
+      } else {
+	//console.log("remapTransactions matching transaction for \n%s\n not found in\n%s", json(t), JSON.stringify(ver, null, 2));
+	return t;
+      }
+    } else {
+      return t;
+    }
+  });
+}
+
 function transferBook() {
   var nextYear = accountsList.map(a => Object.assign(
     {
@@ -1626,7 +1656,7 @@ function appendVerification(ver) {
   verifications.push(ver);
   if(verificationsIndex[verId]) {
     console.log("verification %s allready in ledger:\n", verId, JSON.stringify(verificationsIndex[verId]));
-    throw("verification %s allready in ledger:\n", verId, JSON.stringify(verificationsIndex[verId]));
+    throw("verification allready in ledger:\n"+ verId + " " + JSON.stringify(verificationsIndex[verId]));
   }
   verificationsIndex[verId] = ver;
   if(verifications.length > 1 && verifications.slice(-2,1).verdatum > ver.verdatum) {
@@ -1753,16 +1783,20 @@ function importVerification(data) {
   if(ver.verdatum >= startDate && ver.verdatum <= endDate) {
 
     if(verifications.filter(v => Math.abs(v.verdatum.getTime()-ver.verdatum.getTime()) < 24*3600*1000).some(v => {
+//      if(ver.vertext === 'Lön karin,5490990005') {
+//	console.log("check if verification exists against: ", json(ver), json(v));
+//      }
+
       if(formatDate(v.verdatum, "") === formatDate(ver.verdatum, "")) {
 	// same date
 	if(v.vertext === ver.vertext) {
-	  // check if all transactinos match, unless belopp is 0 (motkonto)
+	  // check if all transactions match, unless belopp is 0 (motkonto)
 
 	  if(ver.trans.every(t => {
 	    if(iszero(t.belopp)) {
 	      return true;
 	    }
-	    return v.trans.some(vt => isTransactionsEqual(vt,t));
+	    return v.trans.some(vt => isTransactionsSimilar(vt,t));
 	  })) {
 	    return true;
 	  }
@@ -1805,6 +1839,8 @@ function importYamlVerificationFile(filename) {
 
 async function importVerifications() {
   console.log("import unbooked verifications from: %s", options.verifications);
+  console.log("last verification in book: " + verifications.reduce( (a, v) => v.vernr > a ? v.vernr : a, 0));
+  console.log("next verificationNumber: " + verificationNumber);
 
   return new Promise( async (resolve,reject) => {
     var files = await fsp.readdir(options.verifications);
@@ -2122,6 +2158,48 @@ var cmds = {
       transactionsChanged = true;
       console.log("registred borttaget från %d transaktioner", numCleared);
     }
+  },
+  marktransactions: function(force) {
+    var numMarked = 0;
+
+    transactions.every(t => {
+      if(force || !t.registred) {
+	console.log("mark transaction: ", json(t));
+	//var mt = accounts[t.kontonr].trans.find(mt => isTransactionsEqual(t, mt));
+
+	var mts = accounts[t.kontonr].trans.filter(mt => {
+	  if(t.transtext === "Inbetalning bokförd 190708") {
+	    console.log("similar %s, %s", json(t), json(mt));
+	  }
+	  return isTransactionsSimilar(t, mt);
+	});
+
+	if(mts.length !== 1) {
+	  console.log("not found:  ", mts);
+	  return false;
+	}
+
+	console.log("found in verification: " + mts[0].registred);
+	t.registred = mts[0].registred;
+	transactionsChanged = true;
+	if(t.transtext && !mts[0].transtext) {
+	  mts[0].transtext = t.transtext;
+	}
+
+	if(mts[0].transdat !== t.transdat) {
+	  mts[0].transdat = t.transdat;
+	}
+
+	numMarked++;
+	return true;
+      } else {
+	console.log("transaction registred: ", json(t));
+	return true;
+      }
+    });
+    console.log("num transactions: " + transactions.length);
+    console.log("num marked: " + numMarked);
+    remapTransactions();
   },
   autobook: async function() {
   },
@@ -2915,28 +2993,14 @@ async function run() {
   //console.log("readBook: " + JSON.stringify(accounts['1730']));
   await safeReadJsonFile(options.transactionsFile, transactions);
 
-  transactions = transactions.map(t => {
-    if(t.registred) {
-      //console.log("remap registred imported transaction: " + t.registred);
-      var ver = verificationsIndex[t.registred];
-      var mt = ver.trans.find(vt => isTransactionsEqual(vt, t));
-      if(mt) {
-	//console.log("found matching transaction, remap");
-	return mt;
-      } else {
-	console.log("matching transaction for %s not found", json(t));
-      }
-    } else {
-      return t;
-    }
-  });
-
   //console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
 
   var firstAddedVernr = verificationNumber;
 
   options.importVerifications && await importVerifications();
   options.autobook && await autobookTransactions();
+
+  remapTransactions();
 
   // at this point, all added verifications are unsorted, a.g A3 can be last and A100 first, which is confusing
   // so after all verifications has been sorted, renumber all above last commited verId
@@ -2985,11 +3049,28 @@ async function run() {
 	console.log(json(t));
       });
 
-  } else if(options.dumpUnbooked) {
-    transactions.filter(t=> !t.registred).forEach(t => {
-      console.log(json(t));
-    });
   }
+
+  var showMax = 10;
+  transactions.filter(t => !t.registred).every(t => {
+    if(showMax === 10) {
+      console.log("Unbooked transactions:");
+    }
+
+    showMax--;
+    if(!options.dumpUnbooked && (showMax < 0)) {
+      return false;
+    }
+
+    console.log(json(t));
+
+    return true;
+  });
+  if(showMax < 0) {
+    console.log("...");
+    console.log("not showing %d unbooked transactions", transactions.filter(t=> !t.registred).length);
+  }
+
 
   if(options.dumpVerifications) {
     verifications.forEach(v => {
@@ -2997,6 +3078,12 @@ async function run() {
     });
   }
 
+  if(options.validate) {
+    var validationError = validateAccountingData();
+    if(validationError) {
+      console.log("validation of accounting data failed: ", validationError);
+    }
+  }
   console.log("alldone, exit");
 };
 
