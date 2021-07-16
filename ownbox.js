@@ -468,13 +468,19 @@ const company = (fs.existsSync(confFile + ".yml") && JSON.parse(fs.readFileSync(
 
 */
 
+//1234567890
+//1250000,00
+
+//1234567890 
+//2012-03-14
+
 function formatValue(v) {
   if(typeof v === 'object' && v instanceof Date) {
-    return formatDate(v);
+    return "  " + formatDate(v);
   } else if (typeof v === 'number') {
-    return itoa(v);
+    return ("            "+itoa(v)).slice(-12);
   } else {
-    return v;
+    return (v && (" " + v)) || "";
   }
 
 }
@@ -487,7 +493,7 @@ function printTable(arr) {
   });
   var pad = new Array(widths.reduce( (a, v) => (v > a ? v : a), 0)).fill(' ').join('');
   //console.log("widths: ", widths, "pad: ", pad.length);
-  console.log(header.map( (h,i) => (h + pad).slice(0, widths[i])).join(','));
+  console.log(header.map( (h,i) => (pad + h).slice(-widths[i])).join(','));
   arr.forEach(r => console.log(header.map( (k,i) => (pad+formatValue(r[k])).slice(-widths[i])).join(',')));
 }
 
@@ -517,6 +523,19 @@ function pad(s, width) {
   return ("                    "+s).slice(-width);
 }
 
+
+var month = [
+  "januari",
+  "ferbruari",
+  "mars",
+  "april",
+  "maj",
+  "juni",
+  "juli",
+  "augusti",
+  "september",
+  "november",
+  "december"];
 
 function formatDate(d, separator) {
   return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
@@ -1822,6 +1841,7 @@ function importVerification(data) {
   }
 
   ver.vertext = data.vertext;
+
   ver.trans = data.trans.map(t => {
     var ret = {};
     if(t.kontonr) {
@@ -1833,27 +1853,23 @@ function importVerification(data) {
     }
     ret.transdat = data.transdat || ver.verdatum;
     if(t.transtext) {
-//      console.log("GOT TRANSTEXT: " + t.transtext);
       ret.transtext = t.transtext;
-    } else {
-//      console.log("NO TRANSTEXT: ", t);
     }
     return ret;
   });
+
+  if(!ver.vertext) {
+    ver.vertext = (ver.trans.find(t => !!t.transtext) || {}).transtext;
+  }
 
   // check if verification is within current financial year, or specified endDate for autobooking
   if(ver.verdatum >= startDate && ver.verdatum <= (options.autobookEndDate || endDate)) {
 
     if(verifications.filter(v => Math.abs(v.verdatum.getTime()-ver.verdatum.getTime()) < 24*3600*1000).some(v => {
-//      if(ver.vertext === 'Lön karin,5490990005') {
-//	console.log("check if verification exists against: ", json(ver), json(v));
-//      }
-
       if(formatDate(v.verdatum, "") === formatDate(ver.verdatum, "")) {
 	// same date
 	if(v.vertext === ver.vertext) {
 	  // check if all transactions match, unless belopp is 0 (motkonto)
-
 	  if(ver.trans.every(t => {
 	    if(iszero(t.belopp)) {
 	      return true;
@@ -1880,13 +1896,6 @@ function importYamlVerificationFile(filename) {
   var p = readFileUTF8(filename).then( yaml => {
     debug("readFileUTF8 done");
     var data = YAML.parseAllDocuments(yaml);
-/*
-    , function(holder, key, value) {
-      console.log("add key: " + key, ", value: ", value);
-    });
-*/
-    //console.log("got YAML data: ", data);
-
     data.forEach(d => {
       debug("data: ", d.toJSON());
       let ver = importVerification(d.toJSON());
@@ -2091,22 +2100,30 @@ function autobookTransactions() {
   console.log("autobook done, remaining unbooked transactions: "  + transactions.filter(t => !t.registred).length);
 }
 
-function momsrapport(period) {
-    var momsRapport = [
-      [ "3001", "5" , -1], // I-Försäljning 25%
-      [ "2610", "10", -1], // S-Utgående Moms 25%
-      [ "4515", "20",  1], // K+Inköp varor EU 25 %
-      [ "4531", "22",  1], // K+Tjänst. Utanf. EU  25 %
-      [ "2614", "30", -1], // S-Utgåend moms Omv skatt 25%
-      [ "4545", "50",  1], // K+Import varor 25%
-      [ "2615", "60", -1], // S-Utgående moms varuimport 25 %
-      [ "2640", "0",    1],   // S+Ingående Moms
-      [ "2645", "0",    1]];  // S+Ingående moms Utland
+var momsRapportMall = [
+  [ "3001", "5" , -1], // I-Försäljning 25%
+  [ "2610", "10", -1], // S-Utgående Moms 25%
+  [ "4515", "20",  1], // K+Inköp varor EU 25 %
+  [ "4531", "22",  1], // K+Tjänst. Utanf. EU  25 %
+  [ "2614", "30", -1], // S-Utgåend moms Omv skatt 25%
+  [ "4545", "50",  1], // K+Import varor 25%
+  [ "2615", "60", -1], // S-Utgående moms varuimport 25 %
+  [ "2640", "0",    1],   // S+Ingående Moms
+  [ "2645", "0",    1]];  // S+Ingående moms Utland
 
-    var rapport = momsRapport.map(m => ({
+function momsdeklaration(period) {
+  console.log("momsdeklaration period " + period);
+
+  function sumMomsBelopp(account) {
+    var trans = getTransactionsPeriod(account, period).filter(t => !t.vertext || !t.vertext.startsWith("momsrapport"));
+    console.log("moms belopp trans: ", trans);
+    return sumTransactions(trans);
+  }
+
+    var rapport = momsRapportMall.map(m => ({
       fältnamn: accounts[m[0]].kontonamn.replace("\n"," "),
       fältkod: m[1],
-      belopp: floor(sumPeriod(m[0], period))
+      belopp: floor(sumMomsBelopp(m[0], period))
     }));
 
     //rapport.filter(r => r.fältkod === "0").forEach(i => console.log("ing: ", i));
@@ -2131,12 +2148,15 @@ function momsrapport(period) {
 
 
     // adjust sign for accounts with negative balance
-    rapport.forEach( (r,i) => (r.belopp = itoa( (momsRapport[i] && momsRapport[i][2]) < 0 ? neg(r.belopp ): r.belopp)));
+    rapport.forEach( (r,i) => (r.belopp = itoa( (momsRapportMall[i] && momsRapportMall[i][2]) < 0 ? neg(r.belopp ): r.belopp)));
   return rapport;
 }
 
-function momsredovisning(period) {
+function momsrapport(period) {
+  console.log("bokföring av momsrapport för period " + period);
 
+
+/*
   var momsRapport = [
     [ "3001", "5" , -1], // I-Försäljning 25%
     [ "2610", "10", -1], // S-Utgående Moms 25%
@@ -2147,8 +2167,8 @@ function momsredovisning(period) {
     [ "2615", "60", -1], // S-Utgående moms varuimport 25 %
     [ "2640", "0",    1],   // S+Ingående Moms
     [ "2645", "0",    1]];  // S+Ingående moms Utland
-
-  var rapport = momsRapport.map(m => ({
+*/
+  var rapport = momsRapportMall.map(m => ({
     konto: m[0],
     belopp: sumPeriod(m[0], period)
   }));
@@ -2167,10 +2187,9 @@ function momsredovisning(period) {
 
   var ver = {
     verdatum: periodSlut,
-    vertext: "momsrapport " + period,
+    vertext: "momsrapport " + month[periodStart.getMonth()] + " - " + month[periodSlut.getMonth()],
     trans: []
   };
-
 
   var ing = zero();
   ing = add(ing, floor(kontoMap["2640"].belopp));
@@ -2425,9 +2444,10 @@ var cmds = {
     if(ver) {
       //console.log(YAML.stringify(ver.trans));
       //console.log(json(ver));
-      ver.trans.forEach(t => {
-	console.log(json(t));
-      });
+      //ver.trans.forEach(t => {
+      //console.log(json(t));
+      //});
+      printVerification(ver);
     }
 
   },
@@ -2514,9 +2534,9 @@ var cmds = {
 
 
   },
-  momsrapport: function(period) {
-    console.log("momsrapport för period " + period);
-    console.log("account 3001 " + JSON.stringify(accounts["3001"], null, 2));
+  momsdeklaration: function(period) {
+    console.log("momsdeklaration för period " + period);
+
 /*
 
     var momsRapport = [
@@ -2561,12 +2581,12 @@ var cmds = {
     rapport.forEach( (r,i) => (r.belopp = itoa( (momsRapport[i] && momsRapport[i][2]) < 0 ? neg(r.belopp ): r.belopp)));
 */
 
-    var rapport = momsrapport(period);
+    var rapport = momsdeklaration(period);
     printTable(rapport);
 
   },
-  momsredovisning: function(period) {
-    momsredovisning(period);
+  momsrapport: function(period) {
+    momsrapport(period);
   },
   balans: function () {
     console.log("Tillgångar:");
