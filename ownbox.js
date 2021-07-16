@@ -49,6 +49,7 @@ var options = Object.assign({
   verifications: "verifications",
   autobook: true,
   noAutobook: false,
+  autobookEndDate: "",
   importVerifications: true,
   noImportVerifications: false,
   noAuto: false,
@@ -219,9 +220,29 @@ function floor(num) {
   return num - num % 100;
 }
 
+function sum(args) {
+  var sum = 0;
+
+  if(!Array.isArray(args)) {
+    args = Array.prototype.slice.call(arguments);
+  }
+
+  args.forEach(a => (sum = add(sum, a)) );
+
+  return sum;
+}
+
 function iszero(num) {
   // IEEE754 negative 0 compares true to 0
   if(num === 0) {
+    return true;
+  } else {
+    return false;
+  }
+}
+
+function isneg(num) {
+  if(Math.sign(num) < 0) {
     return true;
   } else {
     return false;
@@ -447,16 +468,27 @@ const company = (fs.existsSync(confFile + ".yml") && JSON.parse(fs.readFileSync(
 
 */
 
+function formatValue(v) {
+  if(typeof v === 'object' && v instanceof Date) {
+    return formatDate(v);
+  } else if (typeof v === 'number') {
+    return itoa(v);
+  } else {
+    return v;
+  }
+
+}
+
 function printTable(arr) {
   var header = Object.keys(arr[0]);
   var widths = header.map(h => 1+h.length);
   arr.forEach(r => {
-    header.forEach( (k,i) => { widths[i] = (widths[i] < r[k].length) ? r[k].length : widths[i]; });
+    header.forEach( (k,i) => { var vl = formatValue(r[k]).length; widths[i] = (widths[i] < vl) ? vl : widths[i]; });
   });
   var pad = new Array(widths.reduce( (a, v) => (v > a ? v : a), 0)).fill(' ').join('');
   //console.log("widths: ", widths, "pad: ", pad.length);
   console.log(header.map( (h,i) => (h + pad).slice(0, widths[i])).join(','));
-  arr.forEach(r => console.log(header.map( (k,i) => (r[k] + pad).slice(0, widths[i])).join(',')));
+  arr.forEach(r => console.log(header.map( (k,i) => (pad+formatValue(r[k])).slice(-widths[i])).join(',')));
 }
 
 function convertDate(d) {
@@ -557,6 +589,11 @@ function setDates() {
   finansialYearString = formatDate(startDate, ".") + "-" + formatDate(endPrintDate, ".");
 
   debug("finansialYearString: " + finansialYearString);
+
+  if(options.autobookEndDate) {
+    console.log("Restrict autobooking verfications/transactions up to: " + options.autobookEndDate);
+    options.autobookEndDate = new Date(options.autobookEndDate);
+  }
 }
 
 function dateRange(date, from, to) {
@@ -908,14 +945,24 @@ function addTranscations(transactions, newTransactions) {
   return addedTransactions;
 }
 
-// 1, 2, 3, 4 => (Q1, Q2, Q3, Q4)
+
+// period under räkenskapsåret,
+// period 1 första 3 månaderna,
+// period 2 månad 4-6 osv.
+// RÅR == kalenderår =>  1, 2, 3, 4 = (Q1, Q2, Q3, Q4)
+
 function getTransactionsPeriod(transactions, period) {
   if(typeof transactions === 'string') {
     transactions = accounts[transactions].trans;
   }
 
   period = period - 1;
-  return transactions.filter(t => ((t.transdat.getMonth() / 3 | 0) === period) );
+  var startMonth = startDate.getMonth();
+  return transactions.filter(t => {
+//    console.log("t: ", t, ((12+t.transdat.getMonth() - startMonth) % 12), period, ((((12+t.transdat.getMonth() - startMonth) % 12) / 3 | 0) === period));
+
+    return  ((((12+t.transdat.getMonth() - startMonth) % 12) / 3 | 0) === period);
+  });
 }
 
 function sumTransactions(trans) {
@@ -1599,21 +1646,28 @@ function readTransactions(filename) {
 }
 
 function remapTransactions() {
+
+  if(verifications.length === 0) {
+    console.log("remapTransactions ignord, no verifications exists");
+    return;
+  }
+
   transactions = transactions.map(t => {
     if(t.registred) {
       //console.log("remap registred imported transaction: " + t.registred);
       var ver = verificationsIndex[t.registred];
-      var mt = ver.trans.find(vt => isTransactionsEqual(vt, t));
-      if(mt) {
-	//console.log("found matching transaction, remap");
-	return mt;
-      } else {
-	//console.log("remapTransactions matching transaction for \n%s\n not found in\n%s", json(t), JSON.stringify(ver, null, 2));
-	return t;
+
+      if(ver) {
+	var mt = ver.trans.find(vt => isTransactionsEqual(vt, t));
+	if(mt) {
+	  //console.log("found matching transaction, remap");
+	  return mt;
+	} else {
+	  //console.log("remapTransactions matching transaction for \n%s\n not found in\n%s", json(t), JSON.stringify(ver, null, 2));
+	}
       }
-    } else {
-      return t;
     }
+    return t;
   });
 }
 
@@ -1747,6 +1801,14 @@ function addVerification(ver, check) {
   }
 }
 
+function printVerification(ver) {
+  console.log("regid: " + ver.serie + ver.vernr);
+  console.log("verdatum: " + formatDate(ver.verdatum));
+  console.log("vertext: " + ver.vertext);
+  console.log("------------------------------------");
+  printTable(ver.trans);
+}
+
 function readFileUTF8(filename) {
   return fs.promises.readFile(filename, 'utf8');
 }
@@ -1779,8 +1841,8 @@ function importVerification(data) {
     return ret;
   });
 
-  // check if verification is within current financial year
-  if(ver.verdatum >= startDate && ver.verdatum <= endDate) {
+  // check if verification is within current financial year, or specified endDate for autobooking
+  if(ver.verdatum >= startDate && ver.verdatum <= (options.autobookEndDate || endDate)) {
 
     if(verifications.filter(v => Math.abs(v.verdatum.getTime()-ver.verdatum.getTime()) < 24*3600*1000).some(v => {
 //      if(ver.vertext === 'Lön karin,5490990005') {
@@ -2016,7 +2078,8 @@ function autobookTransactions() {
   console.log("run autobook on unbooked transactions: ", transactions.filter(t => !t.registred).length);
   var numBooked = 0;
   transactions.forEach(t => {
-    if(!t.registred) {
+    // only autobook unregistred transacions within end date/specified endDate
+    if(!t.registred && t.transdat <= (options.autobookEndDate || endDate) ) {
       debug("autobook: ", json(t));
       var ver = autobook(t);
       if(ver) {
@@ -2026,6 +2089,126 @@ function autobookTransactions() {
     }
   });
   console.log("autobook done, remaining unbooked transactions: "  + transactions.filter(t => !t.registred).length);
+}
+
+function momsrapport(period) {
+    var momsRapport = [
+      [ "3001", "5" , -1], // I-Försäljning 25%
+      [ "2610", "10", -1], // S-Utgående Moms 25%
+      [ "4515", "20",  1], // K+Inköp varor EU 25 %
+      [ "4531", "22",  1], // K+Tjänst. Utanf. EU  25 %
+      [ "2614", "30", -1], // S-Utgåend moms Omv skatt 25%
+      [ "4545", "50",  1], // K+Import varor 25%
+      [ "2615", "60", -1], // S-Utgående moms varuimport 25 %
+      [ "2640", "0",    1],   // S+Ingående Moms
+      [ "2645", "0",    1]];  // S+Ingående moms Utland
+
+    var rapport = momsRapport.map(m => ({
+      fältnamn: accounts[m[0]].kontonamn.replace("\n"," "),
+      fältkod: m[1],
+      belopp: floor(sumPeriod(m[0], period))
+    }));
+
+    //rapport.filter(r => r.fältkod === "0").forEach(i => console.log("ing: ", i));
+
+    var ingMoms = rapport.filter(r => r.fältkod === "0").reduce( (a,v) => add(a, v.belopp), zero());
+
+    debug("ingående moms: " + ingMoms);
+
+    rapport.push({
+      fältnamn: "Ingående moms totalt",
+      fältkod: "48",
+      belopp: ingMoms
+    });
+
+    var resMap = rapport.reduce( (a,v) => (a[v.fältkod] = v, a), {});
+
+    rapport.push({
+      fältnamn: "Moms att betala",
+      fältkod: "49",
+      belopp: neg(add(resMap["48"].belopp,  add(resMap["10"].belopp, add(resMap["30"].belopp, resMap["60"].belopp))))
+    });
+
+
+    // adjust sign for accounts with negative balance
+    rapport.forEach( (r,i) => (r.belopp = itoa( (momsRapport[i] && momsRapport[i][2]) < 0 ? neg(r.belopp ): r.belopp)));
+  return rapport;
+}
+
+function momsredovisning(period) {
+
+  var momsRapport = [
+    [ "3001", "5" , -1], // I-Försäljning 25%
+    [ "2610", "10", -1], // S-Utgående Moms 25%
+    [ "4515", "20",  1], // K+Inköp varor EU 25 %
+    [ "4531", "22",  1], // K+Tjänst. Utanf. EU  25 %
+    [ "2614", "30", -1], // S-Utgåend moms Omv skatt 25%
+    [ "4545", "50",  1], // K+Import varor 25%
+    [ "2615", "60", -1], // S-Utgående moms varuimport 25 %
+    [ "2640", "0",    1],   // S+Ingående Moms
+    [ "2645", "0",    1]];  // S+Ingående moms Utland
+
+  var rapport = momsRapport.map(m => ({
+    konto: m[0],
+    belopp: sumPeriod(m[0], period)
+  }));
+
+  var kontoMap = rapport.reduce( (a,v) => (a[v.konto] = v, a), {});
+
+  console.log("Ingående moms: ", itoa(kontoMap["2640"].belopp));
+
+  var periodStart = new Date(startDate);
+  periodStart.setMonth(periodStart.getMonth()+(period-1)*3);
+  var periodSlut = new Date(periodStart);
+  periodSlut.setMonth(periodSlut.getMonth()+3);
+  periodSlut.setDate(periodSlut.getDate()-1);
+
+  console.log("periodSlut: " + periodSlut);
+
+  var ver = {
+    verdatum: periodSlut,
+    vertext: "momsrapport " + period,
+    trans: []
+  };
+
+
+  var ing = zero();
+  ing = add(ing, floor(kontoMap["2640"].belopp));
+  ing = add(ing, floor(kontoMap["2645"].belopp));
+
+  var utg = zero();
+  utg = add(utg, floor(kontoMap["2610"].belopp));
+  utg = add(utg, floor(kontoMap["2614"].belopp));
+  utg = add(utg, floor(kontoMap["2615"].belopp));
+
+  console.log("momsrapport ing: ", itoa(ing), ", utg: ", itoa(utg));
+
+  var summa = zero();
+  var summa = add(summa, ing)
+  var summa = add(summa, utg);;
+
+  function addAccount(konto) {
+    if(!iszero(kontoMap[konto].belopp)) {
+      ver.trans.push(trans(konto, neg(kontoMap[konto].belopp)));
+    }
+  }
+
+  addAccount("2610");
+  addAccount("2614");
+  addAccount("2615");
+  addAccount("2640");
+  addAccount("2645");
+
+  if(isneg(summa)) {
+    // momsskuld
+    ver.trans.push(trans("2650", summa));
+  } else {
+    // momsfodran
+    ver.trans.push(trans("1650", neg(summa)));
+  }
+  ver.trans.push(motkonto("3740"));
+
+  printVerification(addVerification(ver));
 }
 
 function dumpUnbookedTransactions() {
@@ -2084,6 +2267,32 @@ var cmds = {
   },
   itoa: function(num) {
     console.log("itoa: " + itoa(1*num));
+  },
+  testperiod: function (period) {
+    //console.log("testperiod: ", period);
+    var trans = getTransactionsPeriod(transactions, 1*period);
+    //console.log("got trans: ", trans);
+    printTable(trans.map(t => {
+      t = Object.assign({}, t);
+      t.transdat = "    "+formatDate(t.transdat);
+      t.belopp = ("            "+itoa(t.belopp)).slice(-12);
+      t.transtext = "    " + t.transtext;
+      return t;
+    }));
+  },
+  testsum: function() {
+    var args = Array.prototype.slice.call(arguments);
+    console.log("sum array: ", args);
+    args = args.map(a => {
+      if(typeof a === 'string') {
+	console.log("atoi: %s ", a, atoi(a));
+	return atoi(a);
+      } else {
+	return fromNumber(a);
+      }
+    });
+    console.log("mapped args: ", args);
+    console.log("sum: ", itoa(sum.apply(this, args)));
   },
   prevmonth: function(date) {
     date = (date && new Date(date)) || new Date();
@@ -2305,9 +2514,11 @@ var cmds = {
 
 
   },
-  moms: function(period) {
+  momsrapport: function(period) {
     console.log("momsrapport för period " + period);
     console.log("account 3001 " + JSON.stringify(accounts["3001"], null, 2));
+/*
+
     var momsRapport = [
       [ "3001", "5" , -1], // I-Försäljning 25%
       [ "2610", "10", -1], // S-Utgående Moms 25%
@@ -2345,15 +2556,17 @@ var cmds = {
       belopp: neg(add(resMap["48"].belopp,  add(resMap["10"].belopp, add(resMap["30"].belopp, resMap["60"].belopp))))
     });
 
-    //momsRapport.forEach(r => console.log(r[0] + " " + basKontotyp(r[0])));
 
-    //rapport.forEach( (r,i) => (r.belopp = itoa(mul(r.belopp, fromNumber( (momsRapport[i] && momsRapport[i][2]) || 1)))));
+    // adjust sign for accounts with negative balance
     rapport.forEach( (r,i) => (r.belopp = itoa( (momsRapport[i] && momsRapport[i][2]) < 0 ? neg(r.belopp ): r.belopp)));
+*/
 
-    //console.log("fältnamn, fältkod, belopp");
-    //rapport.forEach(f => console.log(f.fältnamn, f.fältkod, itoa(f.belopp)));
+    var rapport = momsrapport(period);
     printTable(rapport);
 
+  },
+  momsredovisning: function(period) {
+    momsredovisning(period);
   },
   balans: function () {
     console.log("Tillgångar:");
