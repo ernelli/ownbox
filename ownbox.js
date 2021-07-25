@@ -829,7 +829,8 @@ function validateAccountingData(verbose) {
       T: zero(),
       S: zero(),
       I: zero(),
-      K: zero()
+      K: zero(),
+      B: zero()
     };
 
     /*
@@ -859,11 +860,12 @@ function validateAccountingData(verbose) {
     debug("utgående resultat:");
     debug("intäkter: " + itoa(saldon.I));
     debug("kostnader: " + itoa(saldon.K));
+    debug("bokslutsposter: " + itoa(saldon.B));
 
     debug("balansdiff: ", itoa(add(saldon.T, saldon.S)));
-    debug("resultatdiff: ", itoa(add(saldon.I, saldon.K)));
+    debug("resultatdiff: ", itoa(add(add(saldon.I, saldon.K), saldon.B)));
 
-    if(!iszero(add(add(saldon.T, saldon.S),add(saldon.I, saldon.K)))) {
+    if(!iszero(add(add(saldon.T, saldon.S),add(add(saldon.I, saldon.K), saldon.B)))) {
       report("Utgående tillgångar och skulder balanserar inte med intäkter och kostnader!");
     }
   } catch(err) {
@@ -1102,12 +1104,11 @@ function basKontotyp(kontonr) {
     return 'S';
   } else if(kontonr.startsWith("3")) {
     return 'I';
-//  } else if(kontonr.startsWith("8")) {
-//    return 'K';
+  } else if(kontonr.startsWith("8")) {
+    return 'B';
   } else {
     return 'K';
   }
-
 }
 
 function isBalanskonto(kontonr) {
@@ -1435,7 +1436,7 @@ var accountsList = [];
 function addAccount(kontonr, kontonamn, kontotyp) {
   var account = {
     kontonr: kontonr,
-    kontonamn: kontonamn || basKontoplan[kontonr].kontonamn,
+    kontonamn: kontonamn || (basKontoplan[kontonr] && basKontoplan[kontonr].kontonamn) || ("konto " + kontonr),
     kontotyp: kontotyp || basKontotyp(kontonr),
     ib: zero(),
     saldo: zero(),
@@ -2647,20 +2648,46 @@ var cmds = {
     printTable(rapport);
     console.log("------------------------------------------");
     console.log("summa: " + itoa(kostnader));
-    console.log("\nRörelseresultat: " + itoa(neg(add(kostnader, intäkter))));
+
+    // TODO adjust for non deductible costs
+
+    var resultat = neg(add(kostnader, intäkter));
+    console.log("\nResultat före skatt: " + itoa(resultat));
+    var skatt = floor(muldiv(mul(fromNumber(10),div(resultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+
+    rapport = [];
+
+    var bokfposter = zero();
+    accountsList.filter(k => basKontotyp(k.kontonr) === 'B').forEach(k => {
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
+      bokfposter = add(bokfposter, k.saldo);
+    });
+
+    console.log("\nfinansiella poster och bokförings dispositioner");
+    printTable(rapport);
+    console.log("------------------------------------------");
+    console.log("summa: " + itoa(bokfposter));
+
+    console.log("\nSkatt på årets resultat: " + itoa(skatt));
+
+
   },
   bokslut: function () {
     var resultat = neg(add(sumAccountsType('K'), sumAccountsType('I') ));
     var skatt = floor(muldiv(mul(fromNumber(10),div(resultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
-    console.log("Årets resultat: " + itoa(resultat));
-    console.log("Årets skatt: " + itoa(skatt));
-    var åretsresultat = sub(resultat, skatt);
+    console.log("Resultat före skatt: " + itoa(resultat));
+    console.log("Skatt på årets resultat: " + itoa(skatt));
+    var bokslutsdisp = sumAccountsType('B');
+    console.log("Bokslutsdispositioner: " + itoa(bokslutsdisp));
+    var åretsresultat = sub(sub(resultat, skatt), bokslutsdisp);
+    console.log("Årets resultat: " + itoa(åretsresultat));
+
     // crude hack, set verdatum as string
     addVerification({ verdatum: new Date(formatDate(endPrintDate)) ,vertext: "Årets resultat", trans: [ trans("8999", åretsresultat), trans("2099", neg(åretsresultat)) ] });
     addVerification({ verdatum: new Date(formatDate(endPrintDate)), vertext: "Skatt på årets resultat", trans: [ trans("8910", skatt), trans("2512", neg(skatt)) ] });
   },
   arsredovisning: function () {
-    var intäkter = zero();
+//    var intäkter = zero();
 
     var resultatmall = [{
       rubrik: "Nettoomsättning",
@@ -2694,35 +2721,40 @@ var cmds = {
       fields: "7528",
     },{
       rubrik: "Årets resultat",
-      fields: "7450",
+      fields: "7410,7514,7511,7513,7515,7522,7524,7419,7420,7525,7421,7526,7422,7527,7528",
     }];
 
 
     var balansmall = [
       {
-      rubrik: "Materiella anläggningstillgångar",
-      fields: "7214,7215,7216,7217",
-    },
-      {
-      rubrik: "Kortfrisiga fodringar",
-      fields: "7251",
-    },{
-      rubrik: "Kassa och bank",
-      fields: "7281",
-    },{
-      rubrik: "Förutbetalda kostnader och upplupna intäkter",
-      fields: "7263",
-    },{
-      rubrik: "Bundet eget kapital",
-      fields: "7301",
-    },{
-      rubrik: "Fritt eget kapital",
-      fields: "7302",
-    },{
-      rubrik: "Kortfristiga skulder",
-      fields: "7368,7369",
-    }
-];
+	rubrik: "Materiella anläggningstillgångar",
+	fields: "7214,7215,7216,7217",
+      },{
+	rubrik: "Kundfordringar",
+	fields: "7251",
+      },{
+	rubrik: "Övriga fordringar",
+	fields: "7261"
+      },{
+	rubrik: "Kassa och bank",
+	fields: "7281",
+      },{
+	rubrik: "Förutbetalda kostnader och upplupna intäkter",
+	fields: "7263",
+      },{
+	rubrik: "Bundet eget kapital",
+	fields: "7301",
+      },{
+	rubrik: "Balanserat resultat",
+	fields: "7302,7450",
+      },{
+	rubrik: "Årets resultat",
+	fields: "7450",
+      },{
+	rubrik: "Kortfristiga skulder",
+	fields: "7368,7369",
+      }
+    ];
 
     var sammanställning = [];
     var redovisning = {};
@@ -2734,12 +2766,16 @@ var cmds = {
 	  var field = sruFieldCode(sru.srukod, k.saldo);
 	  var post = redovisning[field] || (redovisning[field] = { srukod: field, saldo: zero(), namn: sru.name, konton: [] });
 
+	  console.log("add typ %s, konto: %s, belopp: %s", typ, k.kontonr, itoa(k.saldo));
+
+	  //if(k.kontonr
+	  
 	  post.saldo = add(post.saldo, k.saldo);
 	  post.konton.push(k.kontonr);
 	}
 
 	//      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
-	intäkter = add(intäkter, k.saldo);
+	//intäkter = add(intäkter, k.saldo);
       });
     }
     adderaPoster('I');
@@ -2751,6 +2787,7 @@ var cmds = {
 
     var resultat = zero();
 
+    console.log("----------------------------------------");
     console.log("RESULTATRÄKNING\n");
     resultatmall.forEach(m => {
       var summa  = zero();
@@ -2765,6 +2802,7 @@ var cmds = {
       console.log(m.rubrik + ": " + itoa(summa));
     });
 
+    console.log("----------------------------------------");
     console.log("BALANSRÄKNING\n");
     balansmall.forEach(m => {
       var summa  = zero();
@@ -2774,7 +2812,7 @@ var cmds = {
 	redovisning[f].used = true;
       });
 
-      summa = neg(summa);
+      //summa = neg(summa);
 
       console.log(m.rubrik + ": " + itoa(summa));
     });
