@@ -1011,9 +1011,18 @@ function sumPeriod(account, period) {
   return sum;
 }
 
+function getTransactionsMonth(transactions, month) {
+  month = ((month % 12)+12)%12;
+
+  if(typeof transactions === 'string') {
+    transactions = accounts[transactions].trans;
+  }
+  return transactions.filter(t => t.transdat.getMonth() === month);
+}
+
 function sumMonth(account, month) {
-  console.log("sumPeriod: " + account);
-  var trans = getTransactionsMonth(account, period);
+  //console.log("sumPeriod: " + account);
+  var trans = getTransactionsMonth(account, month);
   var sum = atoi("0");
   trans.forEach(t => { sum = add(sum, t.belopp); });
   return sum;
@@ -2578,7 +2587,22 @@ var cmds = {
 
   arbetsgivaravgifter: function(month) {
 
+    if(typeof month === 'undefined') {
+      month = (new Date()).getMonth() - 1;
+    }
 
+    var rapportMall = [
+      "7211",
+      "7221",
+      "7389",
+      "7511",
+      "7512",
+      "2710"
+    ];
+    rapportMall.forEach(k => {
+      var sum = sumMonth(k, month)
+      console.log(k, itoa(sum), accounts[k].kontonamn);
+    });
   },
   momsdeklaration: function(period) {
     console.log("momsdeklaration för period " + period);
