@@ -1853,6 +1853,7 @@ function printVerification(ver) {
   console.log("vertext: " + ver.vertext);
   console.log("------------------------------------");
   printTable(ver.trans);
+  return ver;
 }
 
 function readFileUTF8(filename) {
@@ -2253,7 +2254,7 @@ function momsrapport(period) {
   console.log("periodSlut: " + periodSlut);
 
   var ver = {
-    verdatum: periodSlut,
+    verdatum: new Date(formatDate(periodSlut)),
     vertext: "momsrapport " + month[periodStart.getMonth()] + " - " + month[periodSlut.getMonth()],
     trans: []
   };
@@ -2293,8 +2294,8 @@ function momsrapport(period) {
     ver.trans.push(trans("1650", neg(summa)));
   }
   ver.trans.push(motkonto("3740"));
-
-  printVerification(addVerification(ver));
+  console.log("\n\nverifikation momsrapport:\n");
+  console.log("DUMP:\n", JSON.stringify(printVerification(addVerification(ver)), null, 2));
 }
 
 function dumpUnbookedTransactions() {
