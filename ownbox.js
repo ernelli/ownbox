@@ -612,7 +612,7 @@ function setDates() {
 
   finansialYearString = formatDate(startDate, ".") + "-" + formatDate(endPrintDate, ".");
 
-  debug("finansialYearString: " + finansialYearString);
+  console.log("finansialYearString: " + finansialYearString);
 
   if(options.autobookEndDate) {
     console.log("Restrict autobooking verfications/transactions up to: " + options.autobookEndDate);
@@ -1588,7 +1588,7 @@ function readBook(filename) {
 	  accounts[obj.kontonr] = obj;
 	  accountsList.push(obj);
 
-	  //if(obj.kontonr === '1730') {
+	  //if(obj.kontonr === '3001') {
 	  //  console.log("inside readbook konto: " + JSON.stringify(obj));
 	  //}
 	} else if(type === 'VER') {
@@ -1637,7 +1637,7 @@ function readBook(filename) {
 
 	    accounts[k] = Object.assign({
 	      kontonr: k,
-	      kontonamn: konto.name,
+	      kontonamn: konto.name.replace(/\n/g, ' '),
 	      saldo: fromNumber(typeof konto.ib === 'number' ? konto.ib : 0),
 	      trans: []
 	    }, typeof konto.ib === 'number' ? { ib: fromNumber(konto.ib) } : {});
@@ -1647,12 +1647,13 @@ function readBook(filename) {
 
 	if(data.verifikationer) {
 	  data.verifikationer.forEach(v => {
-	    addVerification({
+	    //addVerification({
+	    importVerification({
 	      verdatum: new Date(v.datum),
 	      vertext: v.beskrivning + "," + v.id,
 	      trans: v.trans.map(t => ({
 		kontonr: t.konto,
-		belopp: fromNumber(t.belopp)
+		belopp: t.belopp //fromNumber(t.belopp)
 	      }))
 	    });
 	  });
