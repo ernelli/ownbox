@@ -47,6 +47,7 @@ var options = Object.assign({
   baskontoplan: "Kontoplan_Normal_2020.csv",
   srukoder: "INK2_19-P1-exkl-version-2.csv",
   verifications: "verifications",
+  autoMoms: false,
   autobook: true,
   noAutobook: false,
   autobookEndDate: "",
@@ -54,6 +55,7 @@ var options = Object.assign({
   noImportVerifications: false,
   noAuto: false,
   commit: false,
+  forceWrite: false,
   infile: "",
   outfile: "",
   dumpTransactions: false,
@@ -556,6 +558,30 @@ function addDays(d, days) {
   return d;
 }
 
+function dateCompare(a, b) {
+  a = new Date(formatDate(a));
+  b = new Date(formatDate(b));
+
+  if(a > b) {
+    return 1;
+  } else if (a < b) {
+    return -1;
+  } else {
+    return 0;
+  }
+}
+
+function dateInRange(d, from, to) {
+
+  if(from instanceof Date && to instanceof Date) {
+    return dateCompare(d, from) >= 0 && dateCompare(d, to) <= 0;
+  } else if(from && from.from instanceof Date && from.to instanceof Date) {
+      return dateCompare(d, from.from) >= 0 && dateCompare(d, from.to) <= 0;
+  }
+  throw (`dateInRange, invalid parameters ${d}, ${from}, ${to}`);
+}
+
+
 //console.log("Räkenskapsår: " + options.räkenskapsår);
 
 var ledgerFile;
@@ -979,7 +1005,13 @@ function addTranscations(transactions, newTransactions) {
 
 function getTransactionsPeriod(transactions, period) {
   if(typeof transactions === 'string') {
-    transactions = accounts[transactions].trans;
+    if(accounts[transactions] && accounts[transactions].trans) {
+      transactions = accounts[transactions].trans;
+    } else {
+      //console.log("getTransactionsPeriod, account: %s not found in accounts", transactions);
+      //console.log(Object.keys(accounts));
+      return [];
+    }
   }
 
   period = period - 1;
@@ -1635,6 +1667,8 @@ function readBook(filename) {
 	  Object.keys(data.konton).forEach(k => {
 	    var konto = data.konton[k];
 
+	    addAccount(k);
+/*
 	    accounts[k] = Object.assign({
 	      kontonr: k,
 	      kontonamn: konto.name.replace(/\n/g, ' '),
@@ -1642,6 +1676,7 @@ function readBook(filename) {
 	      trans: []
 	    }, typeof konto.ib === 'number' ? { ib: fromNumber(konto.ib) } : {});
 	    accountsList.push(accounts[k]);
+*/
 	  });
 	}
 
@@ -1658,11 +1693,14 @@ function readBook(filename) {
 	    });
 	  });
 	}
+
+/*
 	accountsList.forEach(k => {
 	  if(typeof k.ub === 'number' && k.saldo === 0) {
 	    k.saldo = k.ib;
 	  }
 	});
+*/
       }
 
       validateBook();
@@ -1742,7 +1780,17 @@ function validateVerification(ver) {
 
   var sum = atoi("0");
   //console.log("checksum: ", ver.trans);
-  ver.trans.forEach(t => { sum = add(sum, t.belopp) });
+  if(!ver.trans.every(t => {
+    sum = add(sum, t.belopp)
+    if(!t.transdat instanceof Date) {
+      return false;
+    }
+    return true
+  })) {
+    console.log("invalid verification, invalid transactions: ", ver.trans);
+    return false;
+  }
+
   if(compare(sum, ZERO) !== 0) {
     console.log("trans balance mismatch: " + itoa(sum));
     ver.trans.forEach(t => console.log(itoa(t.belopp)));
@@ -1817,6 +1865,19 @@ function addVerification(ver, check) {
     if(!ver.regdatum) {
       // use current date as regdatum
       ver.regdatum = new Date();
+    }
+
+    // check if we passed the date for moms-rapport
+    if(options.autoMoms && verifications.length > 0) {
+
+      //console.log("run automoms for datum: ", verifications.slice(-1)[0].verdatum);
+
+      var prevPeriod = dateToMomsPeriod(verifications.slice(-1)[0].verdatum);
+      var currPeriod = dateToMomsPeriod(ver.verdatum);
+      if(prevPeriod !== currPeriod) {
+	console.log("stänger momsperiod: " + prevPeriod);
+	momsrapport(prevPeriod);
+      }
     }
 
     ver.serie = verificationSeries;
@@ -2010,9 +2071,14 @@ function findVerification(text, kontonr, dateFrom, dateTo) {
 
   var res;
   if(kontonr) {
+
+    if(!accounts[kontonr]) {
+      debug("findVerification, no transactions for " + kontonr);
+      return false;
+    }
     res = accounts[kontonr].trans.map(t => verificationsIndex[t.registred]).filter(v => { /*console.log("match v: ", v); */ return matchfunc(v.vertext); });
   } else {
-    res = verifiactions.filter(v => matchfunc(v.vertext));
+    res = verifications.filter(v => matchfunc(v.vertext));
   }
 
   return res.length === 1 ? res[0] : false;
@@ -2026,7 +2092,7 @@ function findVerification(text, kontonr, dateFrom, dateTo) {
 //}
 
 function autobook(t) {
-  if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000))) {
+  if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000)) || matchTransaction(t, /^SEB pension/, "1930", fromNumber(-20000))) {
     //console.log("autobook SEB pension" + JSON.stringify(t));
     addVerification({ trans: [ t, trans("7412", neg(t.belopp)),
 				      trans("2514", muldiv(t.belopp, skattesatser.särskildlöneskatt, 10000)),
@@ -2063,6 +2129,17 @@ function autobook(t) {
 			       trans("2731", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
 			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(-0.04))
+			     ]});
+  } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11305))) {
+    let pension = fromNumber(11056.20);
+    let forman = fromNumber(249.02);
+    addVerification({ trans: [ t, trans("7412", pension),
+			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
+			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
+			       trans("7389", forman),
+			       trans("2731", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
+			       trans("3740", fromNumber(-0.22))
 			     ]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-100))) {
     addVerification({ trans: [ t, motkonto("6570")]});
@@ -2158,24 +2235,52 @@ var momsRapportMall = [
   [ "2645", "0",    1]];  // S+Ingående moms Utland
 
 function momsRapportPeriod(period) {
-  var periodStart = new Date(startDate);
-  periodStart.setMonth(periodStart.getMonth()+(period-1)*options.momsperiod);
-  var periodSlut = new Date(periodStart);
-  periodSlut.setMonth(periodSlut.getMonth()+options.momsperiod);
-  periodSlut.setDate(periodSlut.getDate()-1);
-  debug("periodSlut: " + periodSlut);
-  debug("period: ", periodStart.getMonth(), periodSlut.getMonth());
+  var from = new Date(startDate);
+  from.setMonth(from.getMonth()+(period-1)*3);
+  var to = new Date(from);
+  to.setMonth(to.getMonth()+3);
+  to.setDate(to.getDate()-1);
+
+  debug("periodSlut: " + to);
+  debug("period: ", from.getMonth(), to.getMonth());
   return {
-    periodStart: periodStart,
-    periodSlut: periodSlut,
-    periodText: month[periodStart.getMonth()] + " - " + month[periodSlut.getMonth()]
+    from: from,
+    to: to
   };
+}
+
+function periodText(range) {
+  return  month[range.from.getMonth()] + " - " + month[range.to.getMonth()];
+}
+
+function dateToMomsPeriod(date) {
+  // quick and dirty
+
+  var log = "";
+
+  var period = 1;
+  var numPeriods = 12 / options.momsperiod;
+  while(period <= numPeriods) {
+    var d = momsRapportPeriod(period);
+
+    log+= `testing ${date} against momsperiod: ${json(d)}\n`;
+
+    //if(date >= d.from && date <= d.to) {
+    if(dateInRange(date, d)) {
+      return period;
+    }
+    period++;
+  }
+
+  console.log("did not find date in momsperioder: ", log);
+
+  throw(`dateToMomsPeriod, ${date} not in fiscal year: ${finansialYearString}`);
 }
 
 function momsdeklaration(period) {
   var momsPeriod = momsRapportPeriod(period);
 
-  console.log("momsdeklaration för " + momsPeriod.periodText);
+  console.log("momsdeklaration för " + periodText(momsPeriod));
 
   // check if an existing verification for this period has been booked
   var vertext = "momsrapport " + momsPeriod.periodText;
@@ -2224,8 +2329,6 @@ function momsdeklaration(period) {
 function momsrapport(period) {
   console.log("bokföring av momsrapport för period " + period);
 
-  
-
 /*
   var momsRapport = [
     [ "3001", "5" , -1], // I-Försäljning 25%
@@ -2247,16 +2350,16 @@ function momsrapport(period) {
 
   console.log("Ingående moms: ", itoa(kontoMap["2640"].belopp));
 
-  var periodStart = new Date(startDate);
-  periodStart.setMonth(periodStart.getMonth()+(period-1)*3);
-  var periodSlut = new Date(periodStart);
-  periodSlut.setMonth(periodSlut.getMonth()+3);
-  periodSlut.setDate(periodSlut.getDate()-1);
-  console.log("periodSlut: " + periodSlut);
+  var from = new Date(startDate);
+  from.setMonth(from.getMonth()+(period-1)*3);
+  var to = new Date(from);
+  to.setMonth(to.getMonth()+3);
+  to.setDate(to.getDate()-1);
+  console.log("periodSlut: " + to);
 
   var ver = {
-    verdatum: new Date(formatDate(periodSlut)),
-    vertext: "momsrapport " + month[periodStart.getMonth()] + " - " + month[periodSlut.getMonth()],
+    verdatum: new Date(formatDate(to)),
+    vertext: "momsrapport " + month[from.getMonth()] + " - " + month[to.getMonth()],
     trans: []
   };
 
@@ -2355,6 +2458,28 @@ var cmds = {
   },
   itoa: function(num) {
     console.log("itoa: " + itoa(1*num));
+  },
+  testDateCompare: function (a, b) {
+    console.log(dateCompare(new Date(a), new Date(b)));
+  },
+  testmomsp: function() {
+    var nump = 12/options.momsperiod;
+    for(var i = 0; i < 200000; i++) {
+      var p = 1+nump*Math.random()|0;
+      var d = momsRapportPeriod(p);
+
+      var secs = (d.periodSlut - d.periodStart) / 1000;
+      var days = 1+(secs / 86400)|0;
+      var hours = secs / 3600;
+
+      var testDate = addDays(d.periodStart, days*Math.random()|0);
+
+      var cp = dateToMomsPeriod(testDate);
+
+      if(cp !== p) {
+	console.log("failed, p: " + p, ", calc: ", cp, ""+testDate);
+      }
+    }
   },
   testperiod: function (period) {
     //console.log("testperiod: ", period);
@@ -2527,7 +2652,7 @@ var cmds = {
     console.log("--------------------");
     accounts[kontonr].trans.forEach(t => {
       //console.log("add transaction: ", t);
-      table.push({ datum: formatDate(t.transdat), belopp: formatNumber(t.belopp, 10), beskrivning: t.transtext || '', regid: t.registred });
+      table.push({ datum: formatDate(t.transdat), belopp: formatNumber(t.belopp, 10), beskrivning: t.transtext || (verificationsIndex[t.registred] || {}).vertext, regid: t.registred });
     });
     table.length > 0 && printTable(table);
     console.log("--------------------");
@@ -2593,18 +2718,71 @@ var cmds = {
       month = (new Date()).getMonth() - 1;
     }
 
+    var objekt = [];
+
     var rapportMall = [
-      "7211",
-      "7221",
-      "7389",
-      "7511",
-      "7512",
-      "2710"
+      ["7211", 2, 'lön'],
+      ["7221", 1, 'lön'],
+      ["7389", 1, 'förmåner'],
+      ["7511", 0, 'arbetsgivaravgift'],
+      ["7512", 0, 'arbetsgivaravgift'],
     ];
-    rapportMall.forEach(k => {
-      var sum = sumMonth(k, month)
-      console.log(k, itoa(sum), accounts[k].kontonamn);
+    rapportMall.forEach(r => {
+      var k = r[0];
+      var id = r[1];
+      var field = r[2];
+
+      var o = objekt[id];
+      if(!o) {
+	o = objekt[id] = {};
+      }
+
+      if(typeof o[field] === 'undefined') {
+	o[field] = 0;
+      }
+
+      var sum;
+
+      if(field === 'lön') {
+	var trans = getTransactionsMonth(k, month);
+	trans.forEach(t => {
+	  var ver = verificationsIndex[t.registred];
+	  ver.trans.forEach(vt => {
+	    if(vt.kontonr === t.kontonr) {
+	      o[field] += vt.belopp;
+	    }
+
+	    if(vt.kontonr === "2710") {
+	      o['personalskatt'] = (o['personalskatt'] || 0) - vt.belopp;
+	    }
+
+	  });
+	});
+      } else {
+	o[field] += sumMonth(k, month)
+      }
+
+//      objekt[o] = objekt[o] || {};
+//      objekt[o][t] = (objekt[o][t] || 0) + sum;
     });
+
+
+
+    objekt.sort();
+
+    console.log(json(objekt));
+
+    objekt.forEach( (o,i) => {
+      console.log("\nindividuppgifter för " + i + "\n------------------------------");
+      Object.keys(o).forEach( k => {
+	console.log((k + ":                    ").slice(0,20), itoa(o[k]));
+      });
+    });
+
+    console.log("");
+
+    //console.log(k, itoa(sum), accounts[k].kontonamn);
+
   },
   momsdeklaration: function(period) {
     console.log("momsdeklaration för period " + period);
@@ -2795,7 +2973,7 @@ var cmds = {
 	  console.log("add typ %s, konto: %s, belopp: %s", typ, k.kontonr, itoa(k.saldo));
 
 	  //if(k.kontonr
-	  
+
 	  post.saldo = add(post.saldo, k.saldo);
 	  post.konton.push(k.kontonr);
 	}
@@ -3092,10 +3270,11 @@ var cmds = {
   transferBook: function (filename) {
     var nextYear = transferBook();
 
+    //filename = filename || options.accountingFile;
+
     if(filename) {
+      console.log("transfer book to: " + filename);
       writeBook( { accountsList: nextYear }, filename);
-    } else if(options.commit) {
-      // commit into default accounting file
     }
   },
   mergetransactions: function(transactionsFile, sebFile, skvFile) {
@@ -3265,14 +3444,19 @@ async function run() {
 
   var validationError = validateAccountingData();
 
-  if(verificationNumber !== lastVerificationNumber) {
+  if(verbose) {
+    console.log("Check if accounting ledger has changed and commit changes to: ", options.outfile || options.accountingFile);
+    console.log("verificationNumber: %d,  lastVerificationNumber: %d", verificationNumber, lastVerificationNumber);
+  }
+
+  if(options.forceWrite || verificationNumber !== lastVerificationNumber) {
     console.log("accounting ledger has been updated");
     //debug("accounting has been updated: %d != %s", verificationNumber, lastVerificationNumber);
     if(options.commit) {
       var outfile = options.outfile || options.accountingFile;
       console.log("commit changes to %s", outfile);
       if(validationError) {
-	console.log("accounting file not written, acccoung data is erronous:\n", validationError);
+	console.log("accounting file not written, accounting data is erronous:\n", validationError);
       } else {
 	await writeBook({ accountsList: accountsList, verifications: verifications }, outfile);
       }
@@ -3281,7 +3465,11 @@ async function run() {
     debug("accounting ledger has NOT changed: %d == %s", verificationNumber, lastVerificationNumber);
   }
 
-  if(transactionsChanged) {
+  if(verbose) {
+    console.log("Check if transactions ledger has changed and commit changes to: ", options.transactionsFile);
+  }
+
+  if(options.forceWrite || transactionsChanged) {
     console.log("transactions has been updated");
     if(options.commit) {
       console.log("commit changes to %s", options.transactionsFile);
