@@ -1681,16 +1681,32 @@ function readBook(filename) {
 	}
 
 	if(data.verifikationer) {
-	  data.verifikationer.forEach(v => {
+	  data.verifikationer.forEach( (v,i)  => {
 	    //addVerification({
-	    importVerification({
-	      verdatum: new Date(v.datum),
-	      vertext: v.beskrivning + "," + v.id,
-	      trans: v.trans.map(t => ({
-		kontonr: t.konto,
-		belopp: t.belopp //fromNumber(t.belopp)
-	      }))
-	    });
+
+	    if(i === 0 && v.beskrivning === 'IB') {
+	      // special verification, used before to transfer balanskonton
+	      v.trans.forEach(t => {
+		if(accounts[t.konto]) {
+		  accounts[t.konto].ib = fromNumber(t.belopp);
+		  accounts[t.konto].saldo = fromNumber(t.belopp);
+		} else {
+		  throw("konto i IB verifikation saknas: " + t.konto)
+		}
+
+	      });
+
+
+	    } else {
+	      importVerification({
+		verdatum: new Date(v.datum),
+		vertext: v.beskrivning + "," + v.id,
+		trans: v.trans.map(t => ({
+		  kontonr: t.konto,
+		  belopp: t.belopp //fromNumber(t.belopp)
+		}))
+	      });
+	    }
 	  });
 	}
 
