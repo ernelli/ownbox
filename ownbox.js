@@ -50,10 +50,12 @@ var options = Object.assign({
   autoMoms: false,
   autobook: true,
   noAutobook: false,
+  transactionsEnd: "", // if set to a date, ignores transactions after that date
   autobookEndDate: "",
   importVerifications: true,
   noImportVerifications: false,
   noAuto: false,
+
   commit: false,
   forceWrite: false,
   infile: "",
@@ -476,13 +478,32 @@ const company = (fs.existsSync(confFile + ".yml") && JSON.parse(fs.readFileSync(
 //1234567890 
 //2012-03-14
 
-function formatValue(v) {
+var padStr = ""; //new Array(widths.reduce( (a, v) => (v > a ? v : a), 0)).fill(' ').join('');
+function formatValue(v, width, pad) {
+  var str = "";
+
   if(typeof v === 'object' && v instanceof Date) {
-    return "  " + formatDate(v);
+    str = "  " + formatDate(v);
   } else if (typeof v === 'number') {
-    return ("            "+itoa(v)).slice(-12);
+    str = itoa(v);  //("            "+itoa(v)).slice(-12);
   } else {
-    return (v && (" " + v)) || "";
+    str = (v && (" " + v)) || "";
+  }
+
+  if(width) {
+    if(padStr.length < width) {
+      padStr = new Array(width).fill(' ').join('');
+    }
+
+    if(typeof(v) === 'string' && pad !== 'left') {
+      return (str+padStr).slice(0,width);
+    } else if(pad !== 'right') {
+      return (padStr+str).slice(-width);
+    } else {
+      throw("invalid pad");
+    }
+  } else {
+    return str;
   }
 
 }
@@ -497,10 +518,15 @@ function printTable(arr) {
   arr.forEach(r => {
     header.forEach( (k,i) => { var vl = formatValue(r[k]).length; widths[i] = (widths[i] < vl) ? vl : widths[i]; });
   });
-  var pad = new Array(widths.reduce( (a, v) => (v > a ? v : a), 0)).fill(' ').join('');
+  //var pad = new Array(widths.reduce( (a, v) => (v > a ? v : a), 0)).fill(' ').join('');
   //console.log("widths: ", widths, "pad: ", pad.length);
-  console.log(header.map( (h,i) => (pad + h).slice(-widths[i])).join(','));
-  arr.forEach(r => console.log(header.map( (k,i) => (pad+formatValue(r[k])).slice(-widths[i])).join(',')));
+
+  //console.log(header.map( (h,i) => (pad + h).slice(-widths[i])).join(','));
+  console.log(header.map( (h,i) => formatValue(h,  widths[i], i == header.length -1 ? 'right' :  'left')).join(','));
+
+
+  //arr.forEach(r => console.log(header.map( (k,i) => (pad+formatValue(r[k])).slice(-widths[i])).join(',')));
+  arr.forEach(r => console.log(header.map( (k,i) => formatValue(r[k],  widths[i], 'left') ).join(',')));
 }
 
 function convertDate(d) {
@@ -543,6 +569,10 @@ var month = [
   "oktober",
   "november",
   "december"];
+
+function monthText(m) {
+  return month[m];
+}
 
 function formatDate(d, separator) {
   return [ ""+d.getFullYear(), ("00"+(1+d.getMonth())).slice(-2), ("00"+d.getDate()).slice(-2)].join(typeof separator !== 'undefined' ? separator : '-');
@@ -1634,25 +1664,27 @@ function readBook(filename) {
 	    return reject("error reading accounting file, verification " + JSON.stringify(obj) + " has no regid");
 	  }
 
-	  var regId = obj.serie + obj.vernr;
+	  if(!options.transactionsEnd || obj.verdatum < options.transactionsEnd) {
+	    var regId = obj.serie + obj.vernr;
 
-	  verificationNumber = Math.max(obj.vernr + 1, verificationNumber);
+	    verificationNumber = Math.max(obj.vernr + 1, verificationNumber);
 
-	  obj.trans.forEach(t => {
-	    if(t.registred !== regId) {
-	      return reject("error reading accounting file, transaction in verification " + JSON.stringify(obj) + " has mismatching regid: %s !== %s", regId, t.registred);
-	    }
-	    if(!t.transdat) {
-	      return reject("error reading accounting file, transaction in verification " + JSON.stringify(obj) + " has no transdat");
-	    }
+	    obj.trans.forEach(t => {
+	      if(t.registred !== regId) {
+		return reject("error reading accounting file, transaction in verification " + JSON.stringify(obj) + " has mismatching regid: %s !== %s", regId, t.registred);
+	      }
+	      if(!t.transdat) {
+		return reject("error reading accounting file, transaction in verification " + JSON.stringify(obj) + " has no transdat");
+	      }
 
-	    t.transdat = convertDate(t.transdat);
+	      t.transdat = convertDate(t.transdat);
 
-	    accounts[t.kontonr].trans.push(t);
-	    if(t.kontonr === '2731') {
-	      debug("readBook, add: ", JSON.stringify(t));
-	    }
-	  });
+	      accounts[t.kontonr].trans.push(t);
+	      if(t.kontonr === '2731') {
+		debug("readBook, add: ", JSON.stringify(t));
+	      }
+	    });
+	  }
 	}
       }
     });
@@ -1901,21 +1933,23 @@ function addVerification(ver, check) {
 
     const verId = ver.serie + ver.vernr;
 
-    ver.trans.forEach(t => {
-      t.registred = verId;
-      if(!accounts[t.kontonr]) {
-	console.log("add account: ", t.kontonr);
-	addAccount(t.kontonr);
-      }
-      if(!t.transdat) {
-	t.transdat = ver.verdatum;
-      }
-      accounts[t.kontonr].saldo = add(accounts[t.kontonr].saldo, t.belopp);
-      //console.log("add transactions to account: ", accounts[t.kontonr]);
-      accounts[t.kontonr].trans.push(t);
-      transactionsChanged = true;
-    });
-    appendVerification(ver);
+    if(!options.transactionsEnd || ver.verdatum < options.transactionsEnd) {
+      ver.trans.forEach(t => {
+	t.registred = verId;
+	if(!accounts[t.kontonr]) {
+	  console.log("add account: ", t.kontonr);
+	  addAccount(t.kontonr);
+	}
+	if(!t.transdat) {
+	  t.transdat = ver.verdatum;
+	}
+	accounts[t.kontonr].saldo = add(accounts[t.kontonr].saldo, t.belopp);
+	//console.log("add transactions to account: ", accounts[t.kontonr]);
+	accounts[t.kontonr].trans.push(t);
+	transactionsChanged = true;
+      });
+      appendVerification(ver);
+    }
 
     return ver;
   } catch(e) {
@@ -2668,7 +2702,7 @@ var cmds = {
     console.log("--------------------");
     accounts[kontonr].trans.forEach(t => {
       //console.log("add transaction: ", t);
-      table.push({ datum: formatDate(t.transdat), belopp: formatNumber(t.belopp, 10), beskrivning: t.transtext || (verificationsIndex[t.registred] || {}).vertext, regid: t.registred });
+      table.push({ datum: formatDate(t.transdat), belopp: formatNumber(t.belopp, 10), regid: t.registred, beskrivning: t.transtext || (verificationsIndex[t.registred] || {}).vertext });
     });
     table.length > 0 && printTable(table);
     console.log("--------------------");
@@ -2731,7 +2765,7 @@ var cmds = {
   arbetsgivaravgifter: function(month) {
 
     if(typeof month === 'undefined') {
-      month = (new Date()).getMonth() - 1;
+      month = (12 + (new Date()).getMonth() - 1) % 12;
     }
 
     var objekt = [];
@@ -2788,6 +2822,8 @@ var cmds = {
 
     console.log(json(objekt));
 
+    console.log("arbetsgivardeklaration för " + monthText(month));
+
     objekt.forEach( (o,i) => {
       console.log("\nindividuppgifter för " + i + "\n------------------------------");
       Object.keys(o).forEach( k => {
@@ -2809,7 +2845,7 @@ var cmds = {
   momsrapport: function(period) {
     momsrapport(period);
   },
-  balans: function () {
+  balans: function (ib) {
     console.log("Tillgångar:");
     var sum = zero();
 
@@ -2817,12 +2853,10 @@ var cmds = {
 
     accountsList.filter(k => basKontotyp(k.kontonr) === 'T').forEach(k => {
 
-      //if(k.kontonr === '1730') {
-      //console.log("balans konto: " + JSON.stringify(k));
-      //}
+      var saldo = ib ? k.ib : k.saldo;
 
-      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: formatNumber(k.saldo, 10)});
-      sum = add(sum, k.saldo);
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: formatNumber(saldo, 10)});
+      sum = add(sum, saldo);
     });
     printTable(rapport);
     console.log("\ntillgångar");
@@ -2833,8 +2867,11 @@ var cmds = {
 
     sum = 0;
     accountsList.filter(k => basKontotyp(k.kontonr) === 'S').forEach(k => {
-      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: formatNumber(k.saldo, 10)});
-      sum = add(sum, k.saldo);
+
+      var saldo = ib ? k.ib : k.saldo;
+
+      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: formatNumber(saldo, 10)});
+      sum = add(sum, saldo);
     });
     console.log("\nskulder");
     printTable(rapport);
@@ -3399,6 +3436,12 @@ if(!options.debug) {
   disableDebug();
 } else {
   enableDebug();
+}
+
+if(options.transactionsEnd) {
+  if(!options.transactionsEnd instanceof Date) {
+    options.transactionsEnd = new Date(options.transactionsEnd);
+  }
 }
 
 setDates();
