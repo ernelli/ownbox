@@ -55,7 +55,7 @@ var options = Object.assign({
   importVerifications: true,
   noImportVerifications: false,
   noAuto: false,
-
+  forceRenumber: false,
   commit: false,
   forceWrite: false,
   infile: "",
@@ -72,12 +72,43 @@ var hushed = ("importSRUkoder").split(",").reduce( (a,v) => (a[v] = true,a), {})
 
 var finansialYearString;
 
+var historiskaSkattesatser = {
+  bolagsskatt: [
+// skattesats, till och med år:
+    [2200, 2019],
+    [2140, 2021]
+  ]
+
+}
+
 
 var skattesatser = {
   arbetsgivaravgift: 3142,
   särskildlöneskatt: 2426,
-  bolagsskatt:       2140,
+  bolagsskatt:       2060,
   moms:              2500,
+}
+
+
+function updateSkattesatser() {
+  var taxYear = startDate.getFullYear();
+
+  Object.keys(historiskaSkattesatser).forEach(k => {
+    debug("find %s in", k, historiskaSkattesatser);
+
+    var v = historiskaSkattesatser[k];
+
+    v.every( ([skattesats, endYear]) => {
+      debug(` jämför ${skattesats} som slutar ${endYear} med: ${taxYear}`);
+      if(taxYear < endYear) {
+	skattesatser[k] = skattesats;
+	return false;
+      }
+      return true;
+    });
+  });
+
+
 }
 
 var opts = {
@@ -512,6 +543,8 @@ function printTable(arr) {
   if(arr.length === 0) {
     return;
   }
+
+  //console.log("table is: ", arr);
 
   var header = Object.keys(arr[0]);
   var widths = header.map(h => 1+h.length);
@@ -1111,13 +1144,17 @@ function sortVerifications() {
 }
 
 function renumberVerificationsFrom(vernr) {
+  if(options.forceRenumber) {
+    vernr = 1;
+  }
+
   console.log("renumberVerificationsFrom from vernr: " + vernr);
 
   var renumVerifications = verifications.filter(v => v.vernr >= vernr);
 
   renumVerifications.sort( (a,b) => a.vernr - b.vernr);
 
-  if(renumVerifications.some( (e,i,a) => i > 0 ? (a[i].vernr - a[i-1].vernr !== 1) : false) ) {
+  if(!options.forceRenumber && renumVerifications.some( (e,i,a) => i > 0 ? (a[i].vernr - a[i-1].vernr !== 1) : false) ) {
     console.log("renumber verifications failed, vernr not a complete sequence");
     return false;
   }
@@ -1579,6 +1616,13 @@ function dumpTransactions(kontonr) {
     console.log([formatDate(t.transdat), itoa(t.belopp), t.transtext].join(", "));
   });
   console.log("--------------------");
+}
+
+function showInfo() {
+  printTable([
+    ["Räkenskapsår", `${finansialYearString}`]].concat(
+      Object.keys(skattesatser).map(k => [k, itoa(skattesatser[k]) + "%"])
+    ));
 }
 
 function writeBook(book, filename) {
@@ -2344,10 +2388,18 @@ function momsdeklaration(period) {
     return sumTransactions(trans);
   }
 
-    var rapport = momsRapportMall.map(m => ({
-      fältnamn: accounts[m[0]].kontonamn.replace("\n"," "),
-      fältkod: m[1],
-      belopp: floor(sumMomsBelopp(m[0], period))
+  var rapport = momsRapportMall.filter(m => {
+    /*
+    if(!accounts[m[0]]) {
+      console.log("FAILED TO GENERATE MOMSRAPPORT, account " + m[0] + " not found");
+      return false;
+    }
+    */
+    return true;
+  }).map(m => ({
+    fältnamn: ((accounts[m[0]] && accounts[m[0]].kontonamn) || "").replace("\n"," "),
+    fältkod: m[1],
+    belopp: floor(sumMomsBelopp(m[0], period))
     }));
 
     //rapport.filter(r => r.fältkod === "0").forEach(i => console.log("ing: ", i));
@@ -2405,7 +2457,10 @@ function momsrapport(period) {
   var to = new Date(from);
   to.setMonth(to.getMonth()+3);
   to.setDate(to.getDate()-1);
-  console.log("periodSlut: " + to);
+
+  if(verbose) {
+    console.log("periodStart: " + from + ", periodSlut: " + to);
+  }
 
   var ver = {
     verdatum: new Date(formatDate(to)),
@@ -3389,6 +3444,9 @@ var cmds = {
 	ws.end();
       });
     });
+  },
+  info: function () {
+    showInfo();
   }
 };
 
@@ -3444,7 +3502,12 @@ if(options.transactionsEnd) {
   }
 }
 
+// establish the financialYear start and end date based in rar offset
+// and currentdate and redovisningsperiod
+
 setDates();
+
+updateSkattesatser();
 
 ledgerFile = ["accounting", options.orgnummer, finansialYearString, "json"].join('.');
 transactionsFile = ["transactions", options.orgnummer, finansialYearString, "json"].join('.');
