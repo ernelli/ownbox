@@ -1212,7 +1212,7 @@ function basKontotyp(kontonr) {
     return 'S';
   } else if(kontonr.startsWith("3")) {
     return 'I';
-  } else if(kontonr.startsWith("8")) {
+  } else if(kontonr.startsWith("88") || kontonr.startsWith("89")) {
     return 'B';
   } else {
     return 'K';
@@ -2961,11 +2961,11 @@ var cmds = {
     console.log("------------------------------------------");
     console.log("summa: " + itoa(kostnader));
 
-    // TODO adjust for non deductible costs
-
     var resultat = neg(add(kostnader, intäkter));
-    console.log("\nResultat före skatt: " + itoa(resultat));
-    var skatt = floor(muldiv(mul(fromNumber(10),div(resultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+
+    console.log("\nResultat före skatt bokföringsdispositioner: " + itoa(resultat));
+
+    // TODO adjust for non deductible costs
 
     rapport = [];
 
@@ -2980,13 +2980,27 @@ var cmds = {
     console.log("------------------------------------------");
     console.log("summa: " + itoa(bokfposter));
 
-    console.log("\nSkatt på årets resultat: " + itoa(skatt));
+    var ickeAvdragsgillaKonton = ("5099,5199,6072,6342,6982,6992,7622,7623,7632,8423").split(",").reduce( (a,v,i) => (a.add(v), a), new Set);
+    var ickeAvdragsgillaKostnader = sumAccounts( (k => ickeAvdragsgillaKonton.has(k.kontonr)) );
+    var skattemässigtResultat = add(resultat, ickeAvdragsgillaKostnader);
+    var åretsSkatt = floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+    var åretsResultat = sub(resultat, åretsSkatt);
+
+    console.log("\nIcke avdragsgilla kostnader: " + itoa(ickeAvdragsgillaKostnader));
+    console.log("\nSkattemässigt resultat: " + itoa(skattemässigtResultat));
+    console.log("\nSkatt (%s) på årets resultat: " + itoa(åretsSkatt), ""+(skattesatser.bolagsskatt/100) + "%");
+    console.log("\nÅrets resultat: " + itoa(åretsResultat));
 
 
   },
   bokslut: function () {
     var resultat = neg(add(sumAccountsType('K'), sumAccountsType('I') ));
-    var skatt = floor(muldiv(mul(fromNumber(10),div(resultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+
+    var ickeAvdragsgillaKonton = ("5099,5199,6072,6342,6982,6992,7622,7623,7632,8423").split(",").reduce( (a,v,i) => (a.add(v), a), new Set);
+    var ickeAvdragsgillaKostnader = sumAccounts( (k => ickeAvdragsgillaKonton.has(k.kontonr)) );
+    var skattemässigtResultat = add(resultat, ickeAvdragsgillaKostnader);
+
+    var skatt = floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
     console.log("Resultat före skatt: " + itoa(resultat));
     console.log("Skatt på årets resultat: " + itoa(skatt));
     var bokslutsdisp = sumAccountsType('B');
@@ -3078,7 +3092,7 @@ var cmds = {
 	  var field = sruFieldCode(sru.srukod, k.saldo);
 	  var post = redovisning[field] || (redovisning[field] = { srukod: field, saldo: zero(), namn: sru.name, konton: [] });
 
-	  console.log("add typ %s, konto: %s, belopp: %s", typ, k.kontonr, itoa(k.saldo));
+	  console.log("add typ %s, konto: %s, belopp: %s, SRU kod: %s", typ, k.kontonr, itoa(k.saldo), sru.srukod);
 
 	  //if(k.kontonr
 
@@ -3094,6 +3108,7 @@ var cmds = {
     adderaPoster('K');
     adderaPoster('T');
     adderaPoster('S');
+    adderaPoster('B');
 
     //Object.keys(redovisning).forEach(k => console.log(k, redovisning[k]));
 
