@@ -2170,7 +2170,7 @@ function findVerification(text, kontonr, dateFrom, dateTo) {
       debug("findVerification, no transactions for " + kontonr);
       return false;
     }
-    res = accounts[kontonr].trans.map(t => verificationsIndex[t.registred]).filter(v => { /*console.log("match v: ", v); */ return matchfunc(v.vertext); });
+    res = accounts[kontonr].trans.map(t => verificationsIndex[t.registred]).filter(v => { /*console.log("match v: ", v); */ return matchfunc(v.vertext) /* && dateRange(v.verdatum, dateFrom, dateTo)*/ ; });
   } else {
     res = verifications.filter(v => matchfunc(v.vertext));
   }
@@ -2186,7 +2186,7 @@ function findVerification(text, kontonr, dateFrom, dateTo) {
 //}
 
 function autobook(t) {
-  if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000)) || matchTransaction(t, /^SEB pension/, "1930", fromNumber(-20000))) {
+  if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000)) || matchTransaction(t, /^SEB pension/, "1930", fromNumber(-20000)) || matchTransaction(t, /^SEB pension/, "1930", fromNumber(-21000)) || matchTransaction(t, /^SEB pension/, "1930", fromNumber(-3000))) {
     //console.log("autobook SEB pension" + JSON.stringify(t));
     addVerification({ trans: [ t, trans("7412", neg(t.belopp)),
 				      trans("2514", muldiv(t.belopp, skattesatser.särskildlöneskatt, 10000)),
@@ -2235,9 +2235,22 @@ function autobook(t) {
 			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(-0.22))
 			     ]});
+  } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-11282))) {
+    let pension = fromNumber(11033.43);
+    let forman = fromNumber(249.02);
+    addVerification({ trans: [ t, trans("7412", pension),
+			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
+			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
+			       trans("7389", forman),
+			       trans("2731", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
+			       trans("3740", fromNumber(-0.45))
+			     ]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-100))) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-102))) {
+    addVerification({ trans: [ t, motkonto("6570")]});
+  } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-120))) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2518")]});
@@ -2260,8 +2273,15 @@ function autobook(t) {
   } else if(matchTransaction(t, /Avdragen skatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2710")]});
   } else if(matchTransaction(t, /Moms/, "1630")) {
-    addVerification({ trans: [ t, motkonto("2650")]});
-  } else if(matchTransaction(t, /855-4546633/, "1930") || matchTransaction(t, /8554546633/, "1930")) {
+    if(isneg(t.belopp)) {
+      addVerification({ trans: [ t, motkonto("2650")]});
+      console.log("momsinbetaling 1630 -> 2650: ", itoa(t.belopp));
+    } else {
+      addVerification({ trans: [ t, motkonto("1650")]});
+      console.log("momsåterbäring 1650 -> 1630: ", itoa(t.belopp));
+    }
+
+  } else if(matchTransaction(t, /855-4546633/, "1930") || matchTransaction(t, /8554546633/, "1930") || matchTransaction(t, /^6174443000/, "1930") || matchTransaction(t, /^6093807100/, "1930") || matchTransaction(t, /Gsuite ernel/, "1930") ) {
     var ver = addVerification({ trans: [ t,
 			       trans("6540", neg(t.belopp)),
 			       trans("4531", neg(t.belopp)),
@@ -2344,7 +2364,7 @@ function momsRapportPeriod(period) {
 }
 
 function periodText(range) {
-  return  month[range.from.getMonth()] + " - " + month[range.to.getMonth()];
+  return month[range.from.getMonth()] + " - " + month[range.to.getMonth()];
 }
 
 function dateToMomsPeriod(date) {
@@ -2377,10 +2397,16 @@ function momsdeklaration(period) {
   console.log("momsdeklaration för " + periodText(momsPeriod));
 
   // check if an existing verification for this period has been booked
-  var vertext = "momsrapport " + momsPeriod.periodText;
+  var vertext = "momsrapport " + periodText(momsPeriod);
 
   var momsVerifikation = findVerification(vertext, "2650")  || findVerification(vertext, "1650");
   var momsVerRegid = (momsVerifikation && (momsVerifikation.serie + momsVerifikation.vernr)) || "";
+
+  if(momsVerifikation) {
+    debug("Found momsverifikation: ", momsVerifikation);
+  } else {
+    debug("momsverifikation not found: " + vertext);
+  }
 
   function sumMomsBelopp(account) {
     var trans = getTransactionsPeriod(account, period).filter(t => t.registred !== momsVerRegid);
@@ -2429,6 +2455,16 @@ function momsdeklaration(period) {
 }
 
 function momsrapport(period) {
+
+  var from = new Date(startDate);
+  from.setMonth(from.getMonth()+(period-1)*3); // TODO: Make momsperiod configurable
+  var to = new Date(from);
+  to.setMonth(to.getMonth()+3);
+  to.setDate(to.getDate()-1);
+
+  // check if momsrapport has been booked
+  var rapport = findVerification(/^momsrapport/, "2650", to, to);
+
   console.log("bokföring av momsrapport för period " + period);
 
 /*
@@ -2452,11 +2488,6 @@ function momsrapport(period) {
 
   console.log("Ingående moms: ", itoa(kontoMap["2640"].belopp));
 
-  var from = new Date(startDate);
-  from.setMonth(from.getMonth()+(period-1)*3);
-  var to = new Date(from);
-  to.setMonth(to.getMonth()+3);
-  to.setDate(to.getDate()-1);
 
   if(verbose) {
     console.log("periodStart: " + from + ", periodSlut: " + to);
@@ -2500,7 +2531,7 @@ function momsrapport(period) {
     ver.trans.push(trans("2650", summa));
   } else {
     // momsfodran
-    ver.trans.push(trans("1650", neg(summa)));
+    ver.trans.push(trans("1650", summa));
   }
   ver.trans.push(motkonto("3740"));
   console.log("\n\nverifikation momsrapport:\n");
@@ -2892,7 +2923,7 @@ var cmds = {
 
   },
   momsdeklaration: function(period) {
-    console.log("momsdeklaration för period " + period);
+    //console.log("momsdeklaration för period " + period);
     var rapport = momsdeklaration(period);
     printTable(rapport);
 
@@ -3575,7 +3606,7 @@ async function run() {
 
   renumberVerificationsFrom(firstAddedVernr);
 
-  debug("accounting init done, run command");
+  debug("accounting init done, run commands");
 
   cmds[args[0]] ? await cmds[args[0]].apply(this, args.slice(1)) : (console.error("Unknown command: " + args[0] + ", valid commands: ", Object.keys(cmds)), alldone());
 
