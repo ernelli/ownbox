@@ -2246,11 +2246,24 @@ function autobook(t) {
 			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(-0.45))
 			     ]});
+  } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-10895))) {
+    let pension = fromNumber(10610.62);
+    let forman = fromNumber(284.12);
+    addVerification({ trans: [ t, trans("7412", pension),
+			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
+			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
+			       trans("7389", forman),
+			       trans("2731", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
+			       trans("3740", fromNumber(0.26))
+			     ]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-100))) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-102))) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-120))) {
+    addVerification({ trans: [ t, motkonto("6570")]});
+  } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-130))) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2518")]});
@@ -2317,6 +2330,10 @@ function autobook(t) {
       //console.log("Inbetalning bokförd, found matching transation: " + JSON.stringify(ts));
       addVerification({ trans: [ t, ts ]});
     }
+  } else if(matchTransaction(t, /Intäktsränta/, "1630") || matchTransaction(t, /Korrigerad intäktsränta/, "1630")) {
+    addVerification({ trans: [ t, motkonto("8314")]});
+  } else if(matchTransaction(t, /Kostnadsränta/, "1630") || matchTransaction(t, /Korrigerad kostnadsränta/, "1630")) {
+    addVerification({ trans: [ t, motkonto("8423")]});
   }
 }
 
@@ -2543,7 +2560,7 @@ function dumpUnbookedTransactions() {
     if(!t.registred) {
       console.log(YAML.stringify({
 	verdatum: formatDate(t.transdat, "-"),
-	trans: [Object.assign({}, t, { belopp: 1*itoa(t.belopp) }) ]
+	trans: [Object.assign({}, t, { belopp: 1*itoa(t.belopp), transdat: formatDate(t.transdat, "-") }) ]
       }) + '\n...\n');
     }
   });
@@ -3014,7 +3031,7 @@ var cmds = {
     var ickeAvdragsgillaKonton = ("5099,5199,6072,6342,6982,6992,7622,7623,7632,8423").split(",").reduce( (a,v,i) => (a.add(v), a), new Set);
     var ickeAvdragsgillaKostnader = sumAccounts( (k => ickeAvdragsgillaKonton.has(k.kontonr)) );
     var skattemässigtResultat = add(resultat, ickeAvdragsgillaKostnader);
-    var åretsSkatt = floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+    var åretsSkatt = isneg(skattemässigtResultat) ? zero() :  floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
     var åretsResultat = sub(resultat, åretsSkatt);
 
     console.log("\nIcke avdragsgilla kostnader: " + itoa(ickeAvdragsgillaKostnader));
@@ -3291,7 +3308,7 @@ var cmds = {
 	      return a;
 	    },{});
 
-      var deklarationsPeriod = startDate.getFullYear() + (beskattningsperioder[financialYearEndDate]);
+      var deklarationsPeriod = endDate.getFullYear() + (beskattningsperioder[financialYearEndDate]);
       var bolagsnamn = options.bolagsnamn || "Demobolag AB";
       var identitet = options.identitet || "191010101010";
       var orgnr = options.orgnummer || "191010101010";
@@ -3667,7 +3684,11 @@ async function run() {
       return false;
     }
 
-    console.log(json(t));
+    console.log('...\n'+YAML.stringify({
+      verdatum: formatDate(t.transdat, "-"),
+      trans: [Object.assign({}, t, { belopp: 1*itoa(t.belopp), transdat: formatDate(t.transdat, "-") }) ]
+    }));
+    //console.log(json(t));
 
     return true;
   });
