@@ -1937,10 +1937,10 @@ function addVerification(ver, check) {
       // find matching transaction in unbooked transactions
       var mt = findTransaction(t.transtext || ver.vertext, t.kontonr, t.belopp, t.transdat, t.transdat);
       if(mt) {
-	//console.log("matching transaction found for %s: ", t.kontonr, json(mt));
+	debug("matching transaction found for %s: ", t.kontonr, json(mt));
 	return mt;
       } else {
-	//debug("matching transaction NOT found: ", json(t));
+	debug("matching transaction NOT found: ", json(t));
 	return t;
       }
       //var findTransaction(t)
@@ -2046,13 +2046,17 @@ function importVerification(data) {
     ver.vertext = (ver.trans.find(t => !!t.transtext) || {}).transtext;
   }
 
+
   // check if verification is within current financial year, or specified endDate for autobooking
   if(ver.verdatum >= startDate && ver.verdatum <= (options.autobookEndDate || endDate)) {
 
     if(verifications.filter(v => Math.abs(v.verdatum.getTime()-ver.verdatum.getTime()) < 24*3600*1000).some(v => {
+
+      //debug("check if verification in book matches: " + v.serie + v.vernr);
+
       if(formatDate(v.verdatum, "") === formatDate(ver.verdatum, "")) {
 	// same date
-	if(v.vertext === ver.vertext) {
+	if(!ver.vertext || (v.vertext === ver.vertext) ) {
 	  // check if all transactions match, unless belopp is 0 (motkonto)
 	  if(ver.trans.every(t => {
 	    if(iszero(t.belopp)) {
@@ -2066,10 +2070,11 @@ function importVerification(data) {
       }
       return false;
     })) {
-      debug("ignore import verificaion, allready in book: ", json(ver))
+      debug("ignore import verification, allready in book: ", json(ver))
     } else {
       debug("import, add verification: ", json(ver));
       addVerification(ver);
+      debug("import, verification added: ", json(ver));
     }
   }
   return ver;
@@ -2081,9 +2086,11 @@ function importYamlVerificationFile(filename) {
     debug("readFileUTF8 done");
     var data = YAML.parseAllDocuments(yaml);
     data.forEach(d => {
-      debug("data: ", d.toJSON());
+      //debug("data: ", d.toJSON());
       let ver = importVerification(d.toJSON());
-      debug("imported verification: " + JSON.stringify(ver, null, 2));
+      if(ver.serie && ver.regnr) {
+	debug("imported verification: " + JSON.stringify(ver, null, 2));
+      }
     });
     debug("all verifications imported");
   });
