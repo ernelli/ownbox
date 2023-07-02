@@ -24,6 +24,7 @@ do
     #echo "DATE: $DATE"
     DST="$BASENAME.$DATE.csv"
     echo "MOVE: $FILE to $DST"
+    cp $FILE ./archive/download
     mv "$FILE" "$DST"
     echo "convert to json and merge transactions"
     JSON="skv.$DATE.json"
@@ -53,6 +54,7 @@ do
     #echo "DATE: $DATE"
     DST="$BASENAME.$DATE.csv"
     echo "MOVE: $FILE to $DST"
+    cp $FILE ./archive/download
     mv "$FILE" "$DST"
     echo "convert to json"
     JSON="seb.$DATE.json"

@@ -1654,9 +1654,15 @@ function readBook(filename) {
     var lr = lineReader(rs);
 
     rs.on('error', err => {
-      //console.log("failed to readBook: ", err);
+      console.log("rs failed to readBook: ", err);
       return resolve();
     });
+
+    lr.on('error', err => {
+      console.log("lr failed to readBook: ", err);
+      return resolve();
+    });
+
 
     lr.on('line', line => {
       var data;
@@ -2027,14 +2033,24 @@ function importVerification(data) {
   ver.vertext = data.vertext;
 
   ver.trans = data.trans.map(t => {
-    var ret = {};
+    var belopp, ret = {};
     if(t.kontonr) {
       ret.kontonr = t.kontonr;
-      ret.belopp = fromNumber(t.belopp);
+      belopp = t.belopp;
     } else {
       ret.kontonr = Object.keys(t).find(k => k.match(/\d\d\d\d/));
-      ret.belopp = fromNumber(t[ret.kontonr]);
+      belopp = t[ret.kontonr];
     }
+
+    if(typeof belopp === 'string') {
+      //console.log("fix number: ", belopp);
+      belopp = belopp.replace(/[ ']+/,'');
+      belopp = belopp.replace(',','.');
+      //console.log("fixed number: ", belopp);
+    }
+
+    ret.belopp = fromNumber(belopp);
+
     ret.transdat = data.transdat || ver.verdatum;
     if(t.transtext) {
       ret.transtext = t.transtext;
@@ -2595,9 +2611,15 @@ function readJsonStream(rs, array) {
     });
 
     rs.on('error', function (err) {
-      //console.log('readJsonStream Failed: ', err);
+      console.log('readJsonStream rs Failed: ', err);
       return reject(err);
     });
+
+    lineReader.on('error', function (err) {
+      console.log('readJsonStream lineReader Failed: ', err);
+      return reject(err);
+    });
+
   });
 }
 
@@ -2608,7 +2630,7 @@ function readJsonFile(filename, array) {
 function safeReadJsonFile(filename, array) {
   return readJsonFile(filename, array)
     .then( res => Promise.resolve(res))
-    .catch(err => (err.code === 'ENOENT') ? Promise.resolve(array) : Promise.reject(err));
+    .catch(err => (err.code === 'ENOENT') ? (console.log("safeReadJsonFile, resolve []"), Promise.resolve(array)) : (console.log("safeReadJsonFile: " + json(err)), Promise.reject(err)));
 }
 
 var cmds = {
@@ -3608,12 +3630,14 @@ async function run() {
   await importSRUkoder(options.srukoder);
   await readBook(options.infile || options.accountingFile);
 
+  console.log("read book done in run");
+  
   //dumpTransactions('2731');
 
   //console.log("readBook: " + JSON.stringify(accounts['1730']));
   await safeReadJsonFile(options.transactionsFile, transactions);
 
-  //console.log("safeReadJsonFile: " + JSON.stringify(accounts['1730']));
+  console.log("safeReadJsonFile done: ");
 
   var firstAddedVernr = verificationNumber;
 
