@@ -3057,13 +3057,15 @@ var cmds = {
     console.log("------------------------------------------");
     console.log("summa: " + itoa(bokfposter));
 
+    var skattefriaIntäkter = accounts["8314"] ? neg(accounts["8314"].saldo) : ZERO;
     var ickeAvdragsgillaKonton = ("5099,5199,6072,6342,6982,6992,7622,7623,7632,8423").split(",").reduce( (a,v,i) => (a.add(v), a), new Set);
     var ickeAvdragsgillaKostnader = sumAccounts( (k => ickeAvdragsgillaKonton.has(k.kontonr)) );
-    var skattemässigtResultat = add(resultat, ickeAvdragsgillaKostnader);
+    var skattemässigtResultat = sub(add(resultat, ickeAvdragsgillaKostnader), skattefriaIntäkter); //add(resultat, ickeAvdragsgillaKostnader);
     var åretsSkatt = isneg(skattemässigtResultat) ? zero() :  floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
     var åretsResultat = sub(resultat, åretsSkatt);
 
     console.log("\nIcke avdragsgilla kostnader: " + itoa(ickeAvdragsgillaKostnader));
+    console.log("\nSkattefria intäkter: ", itoa(skattefriaIntäkter));
     console.log("\nSkattemässigt resultat: " + itoa(skattemässigtResultat));
     console.log("\nSkatt (%s) på årets resultat: " + itoa(åretsSkatt), ""+(skattesatser.bolagsskatt/100) + "%");
     console.log("\nÅrets resultat: " + itoa(åretsResultat));
@@ -3073,12 +3075,18 @@ var cmds = {
   bokslut: function () {
     var resultat = neg(add(sumAccountsType('K'), sumAccountsType('I') ));
 
+    var skattefriaIntäkter = accounts["8314"] ? neg(accounts["8314"].saldo) : ZERO;
+    //var skattefriaIntäkter = ZERO;
+    console.log("Skattefria intäkter: ", itoa(skattefriaIntäkter));
+
     var ickeAvdragsgillaKonton = ("5099,5199,6072,6342,6982,6992,7622,7623,7632,8423").split(",").reduce( (a,v,i) => (a.add(v), a), new Set);
     var ickeAvdragsgillaKostnader = sumAccounts( (k => ickeAvdragsgillaKonton.has(k.kontonr)) );
-    var skattemässigtResultat = add(resultat, ickeAvdragsgillaKostnader);
+    console.log("Icke avdragsgilla kostnader: ", itoa(ickeAvdragsgillaKostnader));
+    var skattemässigtResultat = sub(add(resultat, ickeAvdragsgillaKostnader), skattefriaIntäkter);
 
     var skatt = floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
     console.log("Resultat före skatt: " + itoa(resultat));
+    console.log("Skattemässigt resultat: " + itoa(skattemässigtResultat));
     console.log("Skatt på årets resultat: " + itoa(skatt));
     var bokslutsdisp = sumAccountsType('B');
     console.log("Bokslutsdispositioner: " + itoa(bokslutsdisp));
@@ -3108,11 +3116,14 @@ var cmds = {
       rubrik: "Rörelseresultat",
       fields: "7410,7514,7511,7513,7515",
     },{
-      rubrik: "Finansiella poster",
+      rubrik: "Finansiella poster, räntekostnader",
       fields: "7522",
     },{
+      rubrik: "Finansiella poster, ränteintäkter",
+      fields: "7417",
+    },{
       rubrik: "Resultat efter finansiella poster",
-      fields: "7410,7514,7511,7513,7515,7522",
+      fields: "7410,7514,7511,7513,7515,7417,7522",
     },{
       rubrik: "Summa bokslutsdispositioner",
       fields: "7524,7419,7420,7525,7421,7526,7422,7527",
@@ -3124,7 +3135,7 @@ var cmds = {
       fields: "7528",
     },{
       rubrik: "Årets resultat",
-      fields: "7410,7514,7511,7513,7515,7522,7524,7419,7420,7525,7421,7526,7422,7527,7528",
+      fields: "7410,7514,7511,7513,7515,7417,7522,7524,7419,7420,7525,7421,7526,7422,7527,7528",
     }];
 
 
@@ -3175,6 +3186,8 @@ var cmds = {
 
 	  post.saldo = add(post.saldo, k.saldo);
 	  post.konton.push(k.kontonr);
+	} else {
+	  console.log("SRU kod för konto: %s, not found", k.kontonr);
 	}
 
 	//      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: itoa(k.saldo)});
@@ -3222,7 +3235,7 @@ var cmds = {
     });
 
 
-    //console.log("unmapped fields");
+    console.log("unmapped fields");
     printTable(Object.keys(redovisning).map(k => redovisning[k]).filter(r => !r.used).map(r => ({ srukod: r.srukod, belopp: r.saldo, namn: r.namn, konton: r.konton.join(",")})));
   },
   deklaration: function() {
