@@ -29,6 +29,7 @@ do
     echo "convert to json and merge transactions"
     JSON="skv.$DATE.json"
     ./ownbox.js skv "$DST" "$JSON"
+    echo ./ownbox.js --no-autobook --no-import-verifications --commit mergetrans "$JSON" "1630"
     ./ownbox.js --no-autobook --no-import-verifications --commit mergetrans "$JSON" "1630"
 done
 
@@ -59,5 +60,6 @@ do
     echo "convert to json"
     JSON="seb.$DATE.json"
     ./ownbox.js seb "$DST" "$JSON"
+    echo ./ownbox.js --no-autobook --no-import-verifications --commit mergetrans "$JSON" "1930"
     ./ownbox.js --no-autobook --no-import-verifications --commit mergetrans "$JSON" "1930"
 done

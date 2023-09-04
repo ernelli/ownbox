@@ -55,6 +55,7 @@ var options = Object.assign({
   importVerifications: true,
   noImportVerifications: false,
   noAuto: false,
+  ignoreDuplicate: "",
   forceRenumber: false,
   commit: false,
   forceWrite: false,
@@ -979,8 +980,13 @@ function validateTransactions(transactions) {
 	//return !isTransactionsEqual(v, transactions[i-1]) && transactionSortFunction(v, transactions[i-1]) >= 0;
 
 	if(isTransactionsEqual(v, transactions[i-1])) {
-	  console.log("duplicate transactions: ", v, transactions[i-1]);
-	  return false;
+	  //console.log("check transtext: ", v.transtext, ", vs, ", options.ignoreDuplicate);
+	  if(options.ignoreDuplicate && v.transtext === options.ignoreDuplicate) {
+	    console.log("IGNORE duplicate transactions: ", v, transactions[i-1]);
+	  } else {
+	    console.log("validateFailed, duplicate transactions: ", v, transactions[i-1]);
+	    return false;
+	  }
 	}
 
 	if(transactionSortFunction(v, transactions[i-1]) < 0) {
