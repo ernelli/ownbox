@@ -2215,7 +2215,13 @@ function findVerification(text, kontonr, dateFrom, dateTo) {
 //}
 
 function autobook(t) {
-  if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000)) || matchTransaction(t, /^SEB pension/, "1930", fromNumber(-20000)) || matchTransaction(t, /^SEB pension/, "1930", fromNumber(-21000)) || matchTransaction(t, /^SEB pension/, "1930", fromNumber(-3000))) {
+  if(matchTransaction(t, /^SEB pension/, "1930", fromNumber(-1000)) ||
+     matchTransaction(t, /^SEB pension/, "1930", fromNumber(-2000)) ||
+     matchTransaction(t, /^SEB pension/, "1930", fromNumber(-20000)) ||
+     matchTransaction(t, /^SEB pension/, "1930", fromNumber(-21000)) ||
+     matchTransaction(t, /^SEB pension/, "1930", fromNumber(-3000)) ||
+     matchTransaction(t, /^SEB pension/, "1930", fromNumber(-19000))
+    ) {
     //console.log("autobook SEB pension" + JSON.stringify(t));
     addVerification({ trans: [ t, trans("7412", neg(t.belopp)),
 				      trans("2514", muldiv(t.belopp, skattesatser.särskildlöneskatt, 10000)),
@@ -2286,6 +2292,17 @@ function autobook(t) {
 			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
 			       trans("3740", fromNumber(0.26))
 			     ]});
+  } else if(matchTransaction(t, /Länsförsäkr/, "1930", fromNumber(-10913))) {
+    let pension = fromNumber(10580.90);
+    let forman = fromNumber(332.06);
+    addVerification({ trans: [ t, trans("7412", pension),
+			       trans("2514", muldiv(neg(pension), skattesatser.särskildlöneskatt, 10000)),
+			       trans("7533", muldiv(pension, skattesatser.särskildlöneskatt, 10000)),
+			       trans("7389", forman),
+			       trans("2731", muldiv(neg(forman), skattesatser.arbetsgivaravgift, 10000)),
+			       trans("7512", muldiv(forman, skattesatser.arbetsgivaravgift, 10000)),
+			       trans("3740", fromNumber(0.04))
+			     ]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-100))) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-102))) {
@@ -2323,7 +2340,13 @@ function autobook(t) {
       console.log("momsåterbäring 1650 -> 1630: ", itoa(t.belopp));
     }
 
-  } else if(matchTransaction(t, /855-4546633/, "1930") || matchTransaction(t, /8554546633/, "1930") || matchTransaction(t, /^6174443000/, "1930") || matchTransaction(t, /^6093807100/, "1930") || matchTransaction(t, /Gsuite ernel/, "1930") ) {
+  } else if(matchTransaction(t, /855-4546633/, "1930") ||
+	    matchTransaction(t, /8554546633/, "1930") ||
+	    matchTransaction(t, /^6174443000/, "1930") ||
+	    matchTransaction(t, /^6093807100/, "1930") ||
+	    matchTransaction(t, /Gsuite ernel/, "1930") ||
+	    matchTransaction(t, /Google gsuit/, "1930")
+	   ) {
     var ver = addVerification({ trans: [ t,
 			       trans("6540", neg(t.belopp)),
 			       trans("4531", neg(t.belopp)),
@@ -2354,7 +2377,7 @@ function autobook(t) {
   } else if(matchTransaction(t, /Utdelning/, "1930")) {
     addVerification({ trans: [ t, motkonto("2898")]});
   } else if(matchTransaction(t, /Skatteverket/, "1930")) {
-    let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, addDays(t.transdat, 3));
+    let ts = findTransaction(/Inbetalning bokförd/, "1630", neg(t.belopp), t.transdat, addDays(t.transdat, 5));
     if(ts) {
       //console.log("Inbetalning bokförd, found matching transation: " + JSON.stringify(ts));
       addVerification({ trans: [ t, ts ]});
