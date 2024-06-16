@@ -2858,7 +2858,7 @@ var cmds = {
   },
   trans: function(kontonr) {
     console.log("konto: %s", kontonr);
-    console.log("IB: %s", itoa(accounts[kontonr].ib));
+    console.log("IB: %s", itoa(accounts[kontonr].ib || 0));
     var table = [];
     console.log("--------------------");
     accounts[kontonr].trans.forEach(t => {
@@ -3102,6 +3102,18 @@ var cmds = {
 
   },
   bokslut: function () {
+    if( (accounts["8999"] || []).trans.length > 0 ||
+	(accounts["8910"] || []).trans.length > 0) {
+      console.log("----------------------------------------");
+      console.log("FINANCIAL YEAR ALREADY CLOSED");
+      console.log("\nall verifications including account 8999 and 8919 will be removed!!!");
+      console.log("----------------------------------------");
+
+      accounts["8999"].trans = [];
+      accounts["8999"].saldo = ZERO;
+      accounts["8910"].trans = [];
+      accounts["8910"].saldo = ZERO;
+    }
     var resultat = neg(add(sumAccountsType('K'), sumAccountsType('I') ));
 
     var skattefriaIntäkter = accounts["8314"] ? neg(accounts["8314"].saldo) : ZERO;
@@ -3113,7 +3125,9 @@ var cmds = {
     console.log("Icke avdragsgilla kostnader: ", itoa(ickeAvdragsgillaKostnader));
     var skattemässigtResultat = sub(add(resultat, ickeAvdragsgillaKostnader), skattefriaIntäkter);
 
-    var skatt = floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+
+//    var skatt = floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+    var skatt = isneg(skattemässigtResultat) ? zero() :  floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
     console.log("Resultat före skatt: " + itoa(resultat));
     console.log("Skattemässigt resultat: " + itoa(skattemässigtResultat));
     console.log("Skatt på årets resultat: " + itoa(skatt));
@@ -3673,7 +3687,7 @@ async function run() {
   await readBook(options.infile || options.accountingFile);
 
   console.log("read book done in run");
-  
+
   //dumpTransactions('2731');
 
   //console.log("readBook: " + JSON.stringify(accounts['1730']));
@@ -3773,7 +3787,8 @@ async function run() {
 
   if(options.dumpVerifications) {
     verifications.forEach(v => {
-      console.log(json(v));
+      printVerification(v);
+      //console.log(json(v));
     });
   }
 
