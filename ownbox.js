@@ -46,6 +46,8 @@ var options = Object.assign({
   transactionsFile: "", //"transactions.json",
   baskontoplan: "Kontoplan_Normal_2020.csv",
   srukoder: "INK2_19-P1-exkl-version-2.csv",
+  ink2rkoder: "INK2R_SKV2002-32-01-23-04.csv",
+  ink2skoder: "INK2S_SKV2002-32-01-23-04.csv",
   verifications: "verifications",
   autoMoms: false,
   autobook: true,
@@ -67,6 +69,7 @@ var options = Object.assign({
   dumpUnbooked: false,
   verboseDebug: "",
   validate: false,
+  excel: false,
 },conf);
 
 var hushed = ("importSRUkoder").split(",").reduce( (a,v) => (a[v] = true,a), {});
@@ -334,6 +337,34 @@ function itoa(num) {
   return (sign < 0 ? '-' : '') + integer + '.' + frac;
 }
 
+function formatNumber(num, format) {
+  var sign = Math.sign(num);
+  var integer = (""+(Math.abs(num) / 100)).split('.')[0];
+  var frac = ("00"+(Math.abs(num) % 100 | 0)).slice(-2);
+
+  var dot;
+
+  if(format === '00,0') {
+    dot = ',';
+  } else if(format === '00.0') {
+    dot = '.';
+  } else {
+    throw("Unsupported number format: " + format);
+  }
+
+  return (sign < 0 ? '-' : '') + integer + ',' + frac;
+}
+
+function formatExcel(num) {
+  var sign = Math.sign(num);
+  var integer = (""+(Math.abs(num) / 100)).split('.')[0];
+  var frac = ("00"+(Math.abs(num) % 100 | 0)).slice(-2);
+
+
+  return (sign < 0 ? '-' : '') + integer + (options.excel ? ',' : '.') + frac;
+
+}
+
 function formatInteger(num) {
   return ""+(num / 100 | 0)
 }
@@ -369,7 +400,7 @@ function parseCSV2Array(str, options) {
 	} while(a.length > 0 && !v.startsWith("\""))
 
 	if(!v.startsWith("\"")) {
-	  console.log(str);
+	  console.log("----------------------------\n"+str+"\n-------------------------");
 	  throw("Invalid CSV, unterminated \"");
 	}
       }
@@ -517,7 +548,7 @@ function formatValue(v, width, pad) {
   if(typeof v === 'object' && v instanceof Date) {
     str = "  " + formatDate(v);
   } else if (typeof v === 'number') {
-    str = itoa(v);  //("            "+itoa(v)).slice(-12);
+    str = options.excel ? formatNumber(v, '0,00') : itoa(v);  //("            "+itoa(v)).slice(-12);
   } else {
     str = (v && (" " + v)) || "";
   }
@@ -545,6 +576,12 @@ function printTable(arr) {
     return;
   }
 
+  var separator = ",";
+
+  if(options.excel) {
+    separator = ";";
+  }
+
   //console.log("table is: ", arr);
 
   var header = Object.keys(arr[0]);
@@ -556,11 +593,11 @@ function printTable(arr) {
   //console.log("widths: ", widths, "pad: ", pad.length);
 
   //console.log(header.map( (h,i) => (pad + h).slice(-widths[i])).join(','));
-  console.log(header.map( (h,i) => formatValue(h,  widths[i], i == header.length -1 ? 'right' :  'left')).join(','));
+  console.log(header.map( (h,i) => formatValue(h,  widths[i], i == header.length -1 ? 'right' :  'left')).join(separator));
 
 
   //arr.forEach(r => console.log(header.map( (k,i) => (pad+formatValue(r[k])).slice(-widths[i])).join(',')));
-  arr.forEach(r => console.log(header.map( (k,i) => formatValue(r[k],  widths[i], 'left') ).join(',')));
+  arr.forEach(r => console.log(header.map( (k,i) => formatValue(r[k],  widths[i], 'left') ).join(separator)));
 }
 
 function convertDate(d) {
@@ -581,14 +618,21 @@ function checkDate(d) {
   }
 }
 
-function formatNumber(n, width) {
+function padNumber(n, width) {
   return ("                    "+itoa(n)).slice(-width);
+}
+
+function padExcel(n, width) {
+  return ("                    "+formatNumber(n, options.excel ? "00,0" : "00.0")).slice(-width);
 }
 
 function pad(s, width) {
   return ("                    "+s).slice(-width);
 }
 
+function fixComma(str) {
+  return str.replace(/,/g,"");
+}
 
 var month = [
   "januari",
@@ -708,6 +752,7 @@ function setDates() {
     console.log("Restrict autobooking verfications/transactions up to: " + options.autobookEndDate);
     options.autobookEndDate = new Date(options.autobookEndDate);
   }
+  lastVerificationDate = new Date(startDate);
 }
 
 function dateRange(date, from, to) {
@@ -1280,6 +1325,9 @@ function findSRUcode(account) {
   }
 }
 
+// code:  SRU kod, 7xxx, 8xxx
+// balance: SRU fields matching negative are selected, such as 3.26/3.27 4.1/4.2
+//
 function sruFieldCode(code, balance) {
   var parts = code.split(",");
   if(parts.length === 1) {
@@ -1530,6 +1578,178 @@ function importBaskontoplan(filename) {
   });
 }
 
+var INK2S_fields = {};
+var INK2R_fields = {};
+
+function importSRUfields(filename) {
+  var prevLine = "";
+  var lineNo = 1;
+
+  var quoteCount = 0;
+
+  var currField;
+
+  var fields = {};
+
+  return new Promise( (resolve, reject) => {
+
+    lineReader(fs.createReadStream(filename, { encoding: 'utf8'}).on('end', () => {
+      debug("INK2S done");
+      //Object.keys(basKontoplan).forEach(k => console.log(basKontoplan[k].kontonr + ": " + basKontoplan[k].kontonamn));
+      return resolve(fields);
+    })).on('line', (line) => {
+      //console.log("got line: " + line);
+
+      quoteCount += (line.match(/\"/g) || []).length;
+
+      if( quoteCount % 2 === 1) {
+	//console.log("odd quotes: " + line);
+	prevLine += line + '\n';
+	return;
+      }
+
+      if(prevLine.length) {
+	line = prevLine + line;
+	prevLine = "";
+      }
+
+      //var parts = line.split(',').map(p => {
+      //  return p.replace(/"/g, '').trim();
+      //});
+
+
+      var cols = parseCSV2Array(line);
+
+      if(lineNo === 4) {
+	console.log("Fields: ", cols);
+      } else if(lineNo > 4) {
+
+	var entry = {
+	  id: "",
+	  attribute: cols[0],
+	  field: cols[1],
+	  type: cols[2],
+	  mandatory: cols[3] === 'J',
+	  sign: cols[4],
+	};
+
+	var match;
+
+	if( (match=entry.attribute.match(/^(\d\.\d+[a-z]?) /)) ) {
+	  //console.log("FieldId: " + match[1] + ", TOTAL: " + entry.attribute);
+	  currField = match[1];
+	  entry.id = currField;
+	} else {
+	  if( currField && (match=entry.attribute.match(/([a-z])\. /))) {
+	    entry.id = currField.match(/(\d\.\d+)/)[1] + match[1];
+	  }
+	}
+
+	//console.log("line: " + lineNo + ", " + json(entry));
+	//INK2S_fields[entry.field] = entry;
+	if(fields[entry.field]) {
+	  throw ("importSRUfields failed, duplicate field: " + entry.field);
+	}
+	fields[entry.field] = entry;
+      }
+
+
+      lineNo++;
+
+      //if(cols[1] && cols[1].match(/^\d$/)) {
+      //  console.log("kontoklass: " + cols[1] + " : " + cols[2]);
+      //}
+    })
+  })
+}
+
+async function importINK2S(filename) {
+  INK2S_fields = await importSRUfields(filename);
+  console.log("number of INK2S fields: " + Object.keys(INK2S_fields).length);
+}
+
+async function importINK2R(filename) {
+  INK2R_fields = await importSRUfields(filename);
+  console.log("number of INK2R fields: " + Object.keys(INK2R_fields).length);
+}
+
+function importINK2S_old(filename) {
+  var prevLine = "";
+  var lineNo = 1;
+
+  var quoteCount = 0;
+
+  var currField;
+  
+  return new Promise( (resolve, reject) => {
+
+    lineReader(fs.createReadStream(filename, { encoding: 'utf8'}).on('end', () => {
+      debug("INK2S done");
+      //Object.keys(basKontoplan).forEach(k => console.log(basKontoplan[k].kontonr + ": " + basKontoplan[k].kontonamn));
+      return resolve();
+    })).on('line', (line) => {
+      //console.log("got line: " + line);
+
+      quoteCount += (line.match(/\"/g) || []).length;
+
+      if( quoteCount % 2 === 1) {
+	//console.log("odd quotes: " + line);
+	prevLine += line + '\n';
+	return;
+      }
+
+      if(prevLine.length) {
+	line = prevLine + line;
+	prevLine = "";
+      }
+
+      //var parts = line.split(',').map(p => {
+      //  return p.replace(/"/g, '').trim();
+      //});
+
+
+      var cols = parseCSV2Array(line);
+
+      if(lineNo === 4) {
+	console.log("Fields: ", cols);
+      } else if(lineNo > 4) {
+
+	var entry = {
+	  id: "",
+	  attribute: cols[0],
+	  field: cols[1],
+	  type: cols[2],
+	  mandatory: cols[3] === 'J',
+	  sign: cols[4],
+	};
+
+	var match;
+
+	if( (match=entry.attribute.match(/^(\d\.\d+[a-z]?). /)) ) {
+	  //console.log("FieldId: " + match[1]);
+	  currField = match[1];
+	  entry.id = currField;
+	} else {
+	  if( currField && (match=entry.attribute.match(/([a-z])\. /))) {
+	    entry.id = currField.match(/(\d\.\d+)/)[1] + match[1];
+	  }
+	}
+
+	//console.log("line: " + lineNo + ", " + json(entry));
+	INK2S_fields[entry.field] = entry;
+      }
+
+
+      lineNo++;
+
+      //if(cols[1] && cols[1].match(/^\d$/)) {
+      //  console.log("kontoklass: " + cols[1] + " : " + cols[2]);
+      //}
+    })
+  })
+}
+
+
 // huvudboken
 var accounts = {};
 var accountsList = [];
@@ -1588,6 +1808,7 @@ var verificationSeries = 'A';
 var verificationNumber = 1;
 // used to detect if new verifications has been added
 var lastVerificationNumber;
+var lastVerificationDate; // Verifications before lastVerificationDate cannot be imported/autobooked
 
 // grundboken
 var verifications = [];
@@ -1916,6 +2137,9 @@ function appendVerification(ver) {
     console.log("appendVerification, insert date mismatch: %s, %s", ""+verifications.slice(-2,1).verdatum, ""+ver.verdatum);
     verifications.sort(verificationSortFunction);
   }
+  if(lastVerificationDate < ver.verdatum) {
+    lastVerificationDate = ver.verdatum;
+  }
 }
 
 
@@ -1960,6 +2184,11 @@ function addVerification(ver, check) {
 
     if(!ver.verdatum) {
       ver.verdatum = ver.trans[0].transdat || (new Date());
+    }
+
+    if(ver.verdatum < lastVerificationDate) {
+      console.log("Verification date before last booked verification");
+      throw("verification date before last verification date in commited transactions");
     }
 
     if(!ver.vertext) {
@@ -2126,6 +2355,8 @@ async function importVerifications() {
   debug("last verification in book: " + verifications.reduce( (a, v) => v.vernr > a ? v.vernr : a, 0));
   debug("next verificationNumber: " + verificationNumber);
 
+  var numImported = verifications.length;
+
   return new Promise( async (resolve,reject) => {
     var files = await fsp.readdir(options.verifications);
     debug("importVerifications got files: ", files);
@@ -2136,7 +2367,8 @@ async function importVerifications() {
 	debug("importVerifications, yaml file imported");
       }
     }
-    console.log("import verifications done");
+    numImported = verifications.length - numImported;
+    console.log("import verifications done, num imported: " + numImported);
     return resolve();
   });
 
@@ -2662,6 +2894,186 @@ function safeReadJsonFile(filename, array) {
     .catch(err => (err.code === 'ENOENT') ? (console.log("safeReadJsonFile, resolve []"), Promise.resolve(array)) : (console.log("safeReadJsonFile: " + json(err)), Promise.reject(err)));
 }
 
+
+function generateDeklaration() {
+
+  function fieldCode(code, balance) {
+    var parts = code.split(",");
+    if(parts.length === 1) {
+      return code;
+    }
+
+    var sign = balance < 0 ? "-1" : "1";
+
+    return parts.filter(v => v.startsWith(sign + ":"))[0].split(":")[1];
+  }
+
+
+  var kontoMap = accountsList.slice(0).sort( (a,b) => { return (1*a.kontonr - 1*b.kontonr); } );
+
+  kontoMap.forEach(k => {
+    k.sru = findSRUcode(k.kontonr);
+
+    if(!k.sru) {
+      console.log("sru kod for account: " + k.kontonr + ", not found");
+    }
+  });
+
+  var ink2r = kontoMap.reduce( (a,v,i) => {
+    //  console.log("Check index: ", i, v);
+
+    if(!i || a[a.length-1].sru.srukod !== v.sru.srukod) {
+      a.push(Object.assign({},v));
+
+      //console.log("new SRU code: " + v.sru.srukod);
+      //if(v.sru.srukod === "7368") {
+      //  console.log("ADD to 7368: " + itoa(v.saldo));
+      //}
+    } else {
+      //if(v.sru.srukod === "7368") {
+      //  console.log("ADD to 7368: " + itoa(v.saldo));
+      //}
+      a[a.length-1].saldo = add(a[a.length-1].saldo, v.saldo);
+      a[a.length-1].konto +="," + v.kontonr;
+    }
+    return a;
+  },[]).map(v => {v.srukod = fieldCode(v.sru.srukod, v.saldo); return v; });
+
+  var konton = kontoMap.reduce( (a,v) => { a[v.kontonr] = v; return a; }, {});
+
+  var sruCodes = {
+    "4.1":  "7650",
+    "4.3a": "7651",
+    "4.3c": "7653",
+    "4.5c": "7754",
+    "4.15": "7670",
+  };
+
+  function sruCode(code) {
+    return sruCodes[code];
+  }
+
+  function addField(code, accountList) {
+    accountList.split(",").forEach(k => {
+      console.log("add account %s: %s", k, itoa(accounts[k].saldo));
+    });
+
+    var sum = accountList.split(",").map(k => k.startsWith('-') ? (accounts[k.slice(1)].saldo) :  accounts[k].saldo).reduce( (a,v) => add(a,v), zero());
+
+    return { srukod: sruCode(code), saldo: sum };
+  }
+
+  var ink2s = [
+    addField("4.1", "8999"),
+    addField("4.3a", "8910"),
+    addField("4.3c", "8423,6072"),
+    addField("4.5c", "8314"),
+    addField("4.15", "8999,8910,8423,6072,8314")
+  ];
+
+
+  function generateInfo() {
+
+    var bolagsnamn = options.bolagsnamn || "Demobolag AB";
+
+    var orgnr = options.orgnummer || "191010101010";
+    var postnr = options.postnr || "11111";
+    var postort = options.postort || "STOCKHOLM";
+    var kontakt = options.kontakt || "Karl Kontakt";
+    var email = options.email || "karl.kontakt@mail.com";
+    var telefon = options.telefon || "0701234567";
+
+    var blankettDatum = formatDate(new Date(), "");
+
+    var info =
+	`#DATABESKRIVNING_START
+#PRODUKT SRU
+#SKAPAD ${blankettDatum}
+#PROGRAM ownbox
+#FILNAMN BLANKETTER.SRU
+#DATABESKRIVNING_SLUT
+#MEDIELEV_START
+#ORGNR ${orgnr}
+#NAMN ${bolagsnamn}
+#POSTNR ${postnr}
+#POSTORT ${postort}
+#KONTAKT ${kontakt}
+#EMAIL ${email}
+#TELEFON ${telefon}
+#MEDIELEV_SLUT`
+    ;
+
+
+    return info;
+  }
+
+  function generateBlankett() {
+
+    var beskattningsperioder =
+	(["31/1, 28/2, 31/3, 30/4",
+	  "31/5, 30/6",
+	  "31/7, 31/8",
+	  "30/9, 31/10, 30/11, 31/12"]).reduce( (a,v,i) => {
+	    v.split(", ").forEach(d => {
+	      var [day, month] = d.split("/");
+	      a[("0"+month).slice(-2) + ("0"+day).slice(-2)] = "P" + (i+1);
+	    });
+	    return a;
+	  },{});
+
+    var deklarationsPeriod = endDate.getFullYear() + (beskattningsperioder[financialYearEndDate]);
+    var bolagsnamn = options.bolagsnamn || "Demobolag AB";
+    var identitet = options.identitet || "191010101010";
+    var orgnr = options.orgnummer || "191010101010";
+    var postnr = options.postnr || "11111";
+    var postort = options.postort || "STOCKHOLM";
+    var kontakt = options.kontakt || "Karl Kontakt";
+    var email = options.email || "karl.kontakt@mail.com";
+    var telefon = options.telefon || "0701234567";
+
+    var datFramst = formatDate(new Date(), "");
+    var tidFramst = formatTime(new Date(), "");
+
+    var startDatum = formatDate(startDate, "");
+    var slutDatum = formatDate(endPrintDate, "");
+
+
+
+    var out = []
+
+    out = out.concat(
+      `#BLANKETT INK2R-${deklarationsPeriod}
+#IDENTITET ${identitet} ${datFramst} ${tidFramst}
+#NAMN ${bolagsnamn}
+#UPPGIFT 7011 ${startDatum}
+#UPPGIFT 7012 ${slutDatum}`.split("\n"));
+
+    out = out.concat(ink2r.map( (v) => ("#UPPGIFT " + v.srukod + " " + formatInteger(abs(v.saldo))) ) );
+    out.push("#BLANKETTSLUT");
+
+    out = out.concat(
+      `#BLANKETT INK2S-${deklarationsPeriod}
+#IDENTITET ${identitet} ${datFramst} ${tidFramst}
+#NAMN ${bolagsnamn}
+#UPPGIFT 7011 ${startDatum}
+#UPPGIFT 7012 ${slutDatum}`.split("\n"));
+
+    out = out.concat(ink2s.map( (v) => ("#UPPGIFT " + v.srukod + " " + formatInteger(abs(v.saldo))) ) );
+
+    out.push("#BLANKETTSLUT");
+    out.push("#FIL_SLUT");
+
+    return out.join("\n") + "\n"
+  }
+
+  var blanketter = generateBlankett();
+  var info = generateInfo();
+
+  console.log(blanketter);
+
+  return { info: info, blanketter: blanketter };
+}
+
 var cmds = {
   atoi: function (str) {
     console.log("num: " + atoi(str));
@@ -2718,6 +3130,9 @@ var cmds = {
     console.log("mapped args: ", args);
     console.log("sum: ", itoa(sum.apply(this, args)));
   },
+  testink2s: function() {
+    importINK2S(options.ink2skoder);
+  },
   prevmonth: function(date) {
     date = (date && new Date(date)) || new Date();
 
@@ -2750,11 +3165,15 @@ var cmds = {
     importBaskontoplan(filename || options.kontoplan);
   },
   srukoder: function(filename) {
+    SRU_koder = [];
+
     importSRUkoder(filename || options.srukoder).then( (res) => {
 
-      SRU_koder.forEach(s => {
-	console.log("SRU: " + JSON.stringify(s));
-      });
+      if(verbose) {
+	SRU_koder.forEach(s => {
+	  console.log("SRU: " + JSON.stringify(s));
+	});
+      }
 
       var testdata = (""+fs.readFileSync("SRU_test.se")).split(/[\r\n]+/);
 
@@ -2776,8 +3195,28 @@ var cmds = {
 
       console.log("test SRU code for 1510: ", findSRUcode("1510"));
       console.log("test SRU code for 1930: ", findSRUcode("1930"));
-    });
 
+      accountsList.forEach(k => {
+	var account = k.kontonr;
+	//var res = findSRUcode(k.kontonr);
+
+	var match = [];
+
+	for(i = 0; i < SRU_koder.length; i++) {
+	  if(account.match(SRU_koder[i].rules.include) && (!SRU_koder[i].rules.exclude || !account.match(SRU_koder[i].rules.exclude))) {
+	    //console.log("match push SRU code: %d", i, SRU_koder[i]);
+	    match.push(SRU_koder[i]);
+	  }
+	}
+
+	if(match.length === 0) {
+	  console.log("SRU code not found for account: ", k);
+	} else if(match.length > 1) {
+	  console.log("account: %s matches multiple SRU codes", account);
+	  console.log(match);
+	}
+      });
+    });
   },
   cleartransactions: function() {
     var numCleared = 0;
@@ -2843,18 +3282,41 @@ var cmds = {
   },
 
 
-  ver: function(regid) {
-    var ver = verificationsIndex[regid];
+  ver: function(filter) {
 
-    if(ver) {
-      //console.log(YAML.stringify(ver.trans));
-      //console.log(json(ver));
-      //ver.trans.forEach(t => {
-      //console.log(json(t));
-      //});
-      printVerification(ver);
+    if(filter && filter.match(/[A-Z]\d+/)) {
+
+      console.log("single verification: " + filter)
+
+      var ver = verificationsIndex[filter];
+
+      if(ver) {
+	printVerification(ver);
+      } else {
+	console.log("verification %s not found", filter);
+      }
+    } else {
+      var from = startDate;
+      var to = endDate;
+
+      console.log("selection filter: " + filter);
+
+      if(filter && filter.match(/\d/)) {
+	var { from, to } = momsRapportPeriod(1*filter);
+      }
+
+      console.log("print verifications from %s to %s", formatDate(from), formatDate(to));
+
+      verifications.forEach(ver => {
+	if(dateRange(ver.verdatum, from, to)) {
+	  printVerification(ver);
+	  console.log("-----------");
+	} else {
+	  //console.log("date out of range: ", formatDate(ver.verdatum));
+	  //printVerification(ver);
+	}
+      });
     }
-
   },
   trans: function(kontonr) {
     console.log("konto: %s", kontonr);
@@ -2863,7 +3325,7 @@ var cmds = {
     console.log("--------------------");
     accounts[kontonr].trans.forEach(t => {
       //console.log("add transaction: ", t);
-      table.push({ datum: formatDate(t.transdat), belopp: formatNumber(t.belopp, 10), regid: t.registred, beskrivning: t.transtext || (verificationsIndex[t.registred] || {}).vertext });
+      table.push({ datum: formatDate(t.transdat), belopp: padNumber(t.belopp, 10), regid: t.registred, beskrivning: t.transtext || (verificationsIndex[t.registred] || {}).vertext });
     });
     table.length > 0 && printTable(table);
     console.log("--------------------");
@@ -2890,9 +3352,9 @@ var cmds = {
 
     console.log(kontonr);
     console.log("----------");
-    trans.forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat), pad(t.registred, 4), t.transtext || verificationsIndex[t.registred].vertext || verificationsIndex[t.registred].vertext || "..."));
+    trans.forEach(t => console.log(padNumber(t.belopp, 10), formatDate(t.transdat), pad(t.registred, 4), t.transtext || verificationsIndex[t.registred].vertext || verificationsIndex[t.registred].vertext || "..."));
     console.log("----------");
-    console.log(formatNumber(sumTransactions(trans), 10));
+    console.log(padNumber(sumTransactions(trans), 10));
 
   },
 
@@ -2900,12 +3362,12 @@ var cmds = {
     date = new Date(date || Date.now());
     console.log(kontonr);
     console.log("-------");
-    console.log(formatNumber(accounts[kontonr].ib || ZERO, 10), formatDate(startDate), "Ingående balans");
-    accounts[kontonr] && accounts[kontonr].trans.filter(t => dateRange(t.transdat, false, date)).forEach(t => console.log(formatNumber(t.belopp, 10), formatDate(t.transdat), pad(t.registred, 4), t.transtext || verificationsIndex[t.registred].vertext || "..."));
+    console.log(padNumber(accounts[kontonr].ib || ZERO, 10), formatDate(startDate), "Ingående balans");
+    accounts[kontonr] && accounts[kontonr].trans.filter(t => dateRange(t.transdat, false, date)).forEach(t => console.log(padNumber(t.belopp, 10), formatDate(t.transdat), pad(t.registred, 4), t.transtext || verificationsIndex[t.registred].vertext || "..."));
     console.log("-------");
-    console.log(formatNumber(saldo(kontonr, date), 10));
+    console.log(padNumber(saldo(kontonr, date), 10));
 
-  //console.log(formatNumber( add( accounts[kontonr].ib ,sumTransactions(accounts[kontonr].trans.filter(t => {
+  //console.log(padNumber( add( accounts[kontonr].ib ,sumTransactions(accounts[kontonr].trans.filter(t => {
     //  return dateRange(t.transdat, false, date)
     //}))), 10));
   },
@@ -3016,13 +3478,13 @@ var cmds = {
 
       var saldo = ib ? k.ib : k.saldo;
 
-      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: formatNumber(saldo, 10)});
+      rapport.push({kontonr: k.kontonr, kontonamn: fixComma(k.kontonamn), saldo: padExcel(saldo, 10)});
       sum = add(sum, saldo);
     });
     printTable(rapport);
     console.log("\ntillgångar");
     console.log("------------------------------------------");
-    console.log("summa: " + itoa(sum));
+    console.log("summa: " + formatExcel(sum));
 
     rapport = [];
 
@@ -3031,13 +3493,13 @@ var cmds = {
 
       var saldo = ib ? k.ib : k.saldo;
 
-      rapport.push({kontonr: k.kontonr, kontonamn: k.kontonamn, saldo: formatNumber(saldo, 10)});
+      rapport.push({kontonr: k.kontonr, kontonamn: fixComma(k.kontonamn), saldo: padExcel(saldo, 10)});
       sum = add(sum, saldo);
     });
     console.log("\nskulder");
     printTable(rapport);
     console.log("------------------------------------------");
-    console.log("summa: " + itoa(sum));
+    console.log("summa: " + formatExcel(sum));
 
   },
   resultat: function() {
@@ -3106,7 +3568,7 @@ var cmds = {
 	(accounts["8910"] || []).trans.length > 0) {
       console.log("----------------------------------------");
       console.log("FINANCIAL YEAR ALREADY CLOSED");
-      console.log("\nall verifications including account 8999 and 8919 will be removed!!!");
+      console.log("\nall verifications including account 8999 and 8910 will be removed!!!");
       console.log("----------------------------------------");
 
       accounts["8999"].trans = [];
@@ -3282,167 +3744,41 @@ var cmds = {
     printTable(Object.keys(redovisning).map(k => redovisning[k]).filter(r => !r.used).map(r => ({ srukod: r.srukod, belopp: r.saldo, namn: r.namn, konton: r.konton.join(",")})));
   },
   deklaration: function() {
+    var deklaration = generateDeklaration();
 
-    function fieldCode(code, balance) {
-      var parts = code.split(",");
-      if(parts.length === 1) {
-	return code;
+    fs.writeFileSync("INFO.SRU", utf8toLATIN1Converter.convert(deklaration.info));
+    fs.writeFileSync("BLANKETTER.SRU", utf8toLATIN1Converter.convert(deklaration.blanketter));
+
+  },
+  sru: function(filename) {
+    var deklaration = generateDeklaration();
+
+    var bl = deklaration.blanketter;
+
+    var blankett;
+
+    var fields;
+
+    bl.split('\n').forEach(l => {
+      var match;
+
+      if( match = l.match(/#BLANKETT ([^\-]+)-/)) {
+	blankett = match[1];
+
+	if(blankett === 'INK2R') {
+	  fields = INK2R_fields;
+	} else if(blankett === 'INK2S') {
+	  fields = INK2S_fields;
+	} else {
+	  throw ("Unknown blankett: " + blankett);
+	}
       }
 
-      var sign = balance < 0 ? "-1" : "1";
 
-      return parts.filter(v => v.startsWith(sign + ":"))[0].split(":")[1];
-    }
-
-
-    var kontoMap = accountsList.slice(0).sort( (a,b) => { return (1*a.kontonr - 1*b.kontonr); } );
-
-    kontoMap.forEach(k => {
-      k.sru = findSRUcode(k.kontonr);
-
-      if(!k.sru) {
-	console.log("sru kod for account: " + k.kontonr + ", not found");
+      if( (match=l.match(/#UPPGIFT (\d\d\d\d) (\d+)/))) {
+	console.log("UPPGIFT: %s %s fältkod: %s", match[1], pad(match[2], 12), (fields[match[1]] || {}).id || "");
       }
     });
-
-    var ink2r = kontoMap.reduce( (a,v,i) => {
-      //  console.log("Check index: ", i, v);
-
-      if(!i || a[a.length-1].sru.srukod !== v.sru.srukod) {
-	a.push(Object.assign({},v));
-      } else {
-	a[a.length-1].saldo = add(a[a.length-1].saldo, v.saldo);
-	a[a.length-1].konto +="," + v.kontonr
-      }
-      return a;
-    },[]).map(v => {v.srukod = fieldCode(v.sru.srukod, v.saldo); return v; });
-
-    var konton = kontoMap.reduce( (a,v) => { a[v.kontonr] = v; return a; }, {});
-
-    var sruCodes = {
-      "4.1":  "7650",
-      "4.3a": "7651",
-      "4.3c": "7653",
-      "4.15": "7670"
-    };
-
-    function sruCode(code) {
-      return sruCodes[code];
-    }
-
-    function addField(code, accountList) {
-      var sum = accountList.split(",").reduce( (a,v) => add(a,accounts[v].saldo), zero());
-
-      return { srukod: sruCode(code), saldo: sum };
-    }
-
-    var ink2s = [
-      addField("4.1", "8999"),
-      addField("4.3a", "8910"),
-      addField("4.3c", "8423,6072"),
-      addField("4.15", "8999,8910,8423,6072")
-    ];
-
-
-    function generateInfo() {
-
-      var bolagsnamn = options.bolagsnamn || "Demobolag AB";
-
-      var orgnr = options.orgnummer || "191010101010";
-      var postnr = options.postnr || "11111";
-      var postort = options.postort || "STOCKHOLM";
-      var kontakt = options.kontakt || "Karl Kontakt";
-      var email = options.email || "karl.kontakt@mail.com";
-      var telefon = options.telefon || "0701234567";
-
-      var blankettDatum = formatDate(new Date(), "");
-
-      var info =
-`#DATABESKRIVNING_START
-#PRODUKT SRU
-#SKAPAD ${blankettDatum}
-#PROGRAM ownbox
-#FILNAMN BLANKETTER.SRU
-#DATABESKRIVNING_SLUT
-#MEDIELEV_START
-#ORGNR ${orgnr}
-#NAMN ${bolagsnamn}
-#POSTNR ${postnr}
-#POSTORT ${postort}
-#KONTAKT ${kontakt}
-#EMAIL ${email}
-#TELEFON ${telefon}
-#MEDIELEV_SLUT`
-;
-
-
-      return info;
-    }
-
-    function generateBlankett() {
-
-      var beskattningsperioder =
-	  (["31/1, 28/2, 31/3, 30/4",
-	    "31/5, 30/6",
-	    "31/7, 31/8",
-	    "30/9, 31/10, 30/11, 31/12"]).reduce( (a,v,i) => {
-	      v.split(", ").forEach(d => {
-		var [day, month] = d.split("/");
-		a[("0"+month).slice(-2) + ("0"+day).slice(-2)] = "P" + (i+1);
-	      });
-	      return a;
-	    },{});
-
-      var deklarationsPeriod = endDate.getFullYear() + (beskattningsperioder[financialYearEndDate]);
-      var bolagsnamn = options.bolagsnamn || "Demobolag AB";
-      var identitet = options.identitet || "191010101010";
-      var orgnr = options.orgnummer || "191010101010";
-      var postnr = options.postnr || "11111";
-      var postort = options.postort || "STOCKHOLM";
-      var kontakt = options.kontakt || "Karl Kontakt";
-      var email = options.email || "karl.kontakt@mail.com";
-      var telefon = options.telefon || "0701234567";
-
-      var datFramst = formatDate(new Date(), "");
-      var tidFramst = formatTime(new Date(), "");
-
-      var startDatum = formatDate(startDate, "");
-      var slutDatum = formatDate(endPrintDate, "");
-
-
-
-      var out = []
-
-      out = out.concat(
-`#BLANKETT INK2R-${deklarationsPeriod}
-#IDENTITET ${identitet} ${datFramst} ${tidFramst}
-#NAMN ${bolagsnamn}
-#UPPGIFT 7011 ${startDatum}
-#UPPGIFT 7012 ${slutDatum}`.split("\n"));
-
-      out = out.concat(ink2r.map( (v) => ("#UPPGIFT " + v.srukod + " " + formatInteger(abs(v.saldo))) ) );
-      out.push("#BLANKETTSLUT");
-
-      out = out.concat(
-	`#BLANKETT INK2S-${deklarationsPeriod}
-#IDENTITET ${identitet} ${datFramst} ${tidFramst}
-#NAMN ${bolagsnamn}
-#UPPGIFT 7011 ${startDatum}
-#UPPGIFT 7012 ${slutDatum}`.split("\n"));
-
-      out = out.concat(ink2s.map( (v) => ("#UPPGIFT " + v.srukod + " " + formatInteger(abs(v.saldo))) ) );
-
-      out.push("#BLANKETTSLUT");
-      out.push("#FIL_SLUT");
-
-      return out.join("\n") + "\n"
-}
-
-    console.log(generateBlankett());
-
-    fs.writeFileSync("INFO.SRU", utf8toLATIN1Converter.convert(generateInfo()));
-    fs.writeFileSync("BLANKETTER.SRU", utf8toLATIN1Converter.convert(generateBlankett()));
-
   },
   validate: function() {
     validateAccountingData(true);
@@ -3605,7 +3941,7 @@ var args = JSON.parse(JSON.stringify(process.argv.slice(2)));
 options.interactive = process.stdout.isTTY ? true : false;
 
 for(var i = 0; i < args.length; i++) {
-  //console.log("check option: " + i + ", remaining args: ", args);
+//  console.log("check option: " + i + ", remaining args: ", args);
 
   if(args[i].startsWith("-") && !args[i].match(/-\d/)) {
     if(opts[args[i]]) {
@@ -3684,9 +4020,13 @@ function alldone() {
 async function run() {
   await importBaskontoplan(options.baskontoplan);
   await importSRUkoder(options.srukoder);
+  await importINK2S(options.ink2skoder);
+  await importINK2R(options.ink2rkoder);
   await readBook(options.infile || options.accountingFile);
 
   console.log("read book done in run");
+
+  console.log("lastVerificationDate: " + lastVerificationDate);
 
   //dumpTransactions('2731');
 
