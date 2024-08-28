@@ -1,8 +1,16 @@
 #!/bin/bash
 
-#mv ~/Download/*
-# mv ~/Downloads/bokf_trans_165590710314* .
-# mv ~/Downloads/Kontohändelser* .
+OPTIONS=$@
+
+if [[ $NO_COMMIT ]]; then
+    COMMIT=""
+else
+    COMMIT="--commit"
+fi
+
+echo COMMIT: $COMMIT
+
+echo OPTIONS: $OPTIONS
 
 BASENAME=bokf_trans_165590710314
 
@@ -26,13 +34,13 @@ do
     echo "MOVE: $FILE to $DST"
     cp $FILE ./archive/download
     mv "$FILE" "$DST"
-    echo "convert to json and merge transactions"
+    echo "convert SKV to json and merge transactions"
     JSON="skv.$DATE.json"
-    ./ownbox.js skv "$DST" "$JSON"
-    echo ./ownbox.js --no-autobook --no-import-verifications --commit mergetrans "$JSON" "1630"
-    ./ownbox.js --no-autobook --no-import-verifications --commit mergetrans "$JSON" "1630"
+    echo CONVERT TO JSON COMMAND: ./ownbox.js $OPTIONS skv "$DST" "$JSON"
+    ./ownbox.js $@ skv "$DST" "$JSON"
+    echo MERGE TRANSACTIONS COMMAND:  ./ownbox.js $OPTIONS --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" "1630"
+    ./ownbox.js $@ --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" "1630"
 done
-
 
 #cp Kontohändelser* ~/Download
 
@@ -59,7 +67,7 @@ do
     mv "$FILE" "$DST"
     echo "convert to json"
     JSON="seb.$DATE.json"
-    ./ownbox.js seb "$DST" "$JSON"
-    echo ./ownbox.js --no-autobook --no-import-verifications --commit mergetrans "$JSON" "1930"
-    ./ownbox.js --no-autobook --no-import-verifications --commit mergetrans "$JSON" "1930"
+    ./ownbox.js seb $@ "$DST" "$JSON"
+    echo ./ownbox.js $OPTIONS --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" "1930"
+    ./ownbox.js $@ --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" "1930"
 done
