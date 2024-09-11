@@ -70,6 +70,7 @@ var options = Object.assign({
   verboseDebug: "",
   validate: false,
   excel: false,
+  corrections: "",
 },conf);
 
 var hushed = ("importSRUkoder").split(",").reduce( (a,v) => (a[v] = true,a), {});
@@ -2030,6 +2031,9 @@ function readBook(filename) {
 
       validateBook();
       lastVerificationNumber = verificationNumber;
+      if(verifications.length > 0) {
+	lastVerificationDate = verifications.slice(-1)[0].verdatum;
+      }
 
       return resolve();
     });
@@ -2137,11 +2141,7 @@ function appendVerification(ver) {
     console.log("appendVerification, insert date mismatch: %s, %s", ""+verifications.slice(-2,1).verdatum, ""+ver.verdatum);
     verifications.sort(verificationSortFunction);
   }
-  if(lastVerificationDate < ver.verdatum) {
-    lastVerificationDate = ver.verdatum;
-  }
 }
-
 
 function addVerification(ver, check) {
   // check if autobalance/motkonto exists
@@ -2186,8 +2186,8 @@ function addVerification(ver, check) {
       ver.verdatum = ver.trans[0].transdat || (new Date());
     }
 
-    if(ver.verdatum < lastVerificationDate) {
-      console.log("Verification date before last booked verification");
+    if(!ver.korrigering && ver.verdatum < lastVerificationDate) {
+      console.log("Verification date before last booked verification: %s < %s", ver.verdatum, lastVerificationDate);
       throw("verification date before last verification date in commited transactions");
     }
 
@@ -2297,6 +2297,10 @@ function importVerification(data) {
     ver.vertext = (ver.trans.find(t => !!t.transtext) || {}).transtext;
   }
 
+
+  if(data.korrigering) {
+    ver.korrigering = true;
+  }
 
   // check if verification is within current financial year, or specified endDate for autobooking
   if(ver.verdatum >= startDate && ver.verdatum <= (options.autobookEndDate || endDate)) {
@@ -4026,6 +4030,7 @@ async function run() {
 
   console.log("read book done in run");
 
+  //lastVerificationDate.setDate(lastVerificationDate.getDate()-1);
   console.log("lastVerificationDate: " + lastVerificationDate);
 
   //dumpTransactions('2731');
@@ -4038,6 +4043,7 @@ async function run() {
   var firstAddedVernr = verificationNumber;
 
   options.importVerifications && await importVerifications();
+  options.corrections && (console.log("Import correction verifications from: " + options.corrections), await importYamlVerificationFile(options.corrections));
   options.autobook && await autobookTransactions();
 
   remapTransactions();
