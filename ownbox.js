@@ -2456,6 +2456,7 @@ function autobook(t) {
      matchTransaction(t, /^SEB pension/, "1930", fromNumber(-20000)) ||
      matchTransaction(t, /^SEB pension/, "1930", fromNumber(-21000)) ||
      matchTransaction(t, /^SEB pension/, "1930", fromNumber(-3000)) ||
+     matchTransaction(t, /^SEB pension/, "1930", fromNumber(-9000)) ||
      matchTransaction(t, /^SEB pension/, "1930", fromNumber(-19000))
     ) {
     //console.log("autobook SEB pension" + JSON.stringify(t));
