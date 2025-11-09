@@ -1,6 +1,7 @@
 #!/bin/bash
 
-OPTIONS=$@
+#OPTIONS="$@"
+OPTIONS=("$@")
 
 if [[ $NO_COMMIT ]]; then
     COMMIT=""
@@ -32,6 +33,7 @@ fi
 
 import_kontoutdrag () {
 
+echo  ========================================
 echo "import_kontoutdrag: " $@
 
 # bokf_trans_165590710314, Kontohändelser
@@ -55,7 +57,7 @@ IFS=$'\n'
 
 for FILE in $FILES
 do
-    #echo Move file: $FILE
+    echo "import kontoutdrag from: $FILE"
 
     # extract the last transaction and use the date as filename
 
@@ -81,38 +83,63 @@ do
     echo "MOVE: $FILE to $DST"
     cp $FILE ./archive/download
     if [[ $NO_COMMIT ]]; then
-	echo "NO_COMMIT, mv $FILE" "$DST"
+       echo mv "$FILE" "$DST"
     else
-	mv "$FILE" "$DST"
+       mv "$FILE" "$DST"
     fi
     echo "convert $FORMAT to json and merge transactions"
     JSON="$FILE_STORE/skv.$DATE.json"
 
     # step 1, convert transactions from CSV to json
-    echo CONVERT TO JSON COMMAND: ./ownbox.js $OPTIONS $FORMAT "$DST" "$JSON"
-    ./ownbox.js $OPTIONS $FORMAT "$DST" "$JSON"
+    echo ----------------------------------------
+    echo CONVERT TO JSON COMMAND: ./ownbox.js "${OPTIONS[@]}" $FORMAT "$DST" "$JSON"
+    ./ownbox.js "${OPTIONS[@]}" $FORMAT "$DST" "$JSON"
+    echo CONVERT TO JSON DONE
+    echo ----------------------------------------
 
     # step 1, merge transactions with existing, e.g, add all new transactions not present
-    echo MERGE TRANSACTIONS COMMAND:  ./ownbox.js $OPTIONS --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
-    ./ownbox.js $OPTIONS --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
-
+    echo ----------------------------------------
+    echo MERGE TRANSACTIONS COMMAND:  ./ownbox.js "${OPTIONS[@]}" --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
+    ./ownbox.js "${OPTIONS[@]}" --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
+    echo MERGE TRANSACTIONS done
+    echo ----------------------------------------
 done
 
 
 }
 
+
+echo "rename downloaded file"
+
+SKV_FILES=$(find ~/Downloads/ -name "Bokförda\ transaktioner*")
+
+if [[ $SKV_FILES != "" ]]; then
+  echo "found SKV_FILES: $SKV_FILES"
+  echo "mv $SKV_FILES ~/Downloads/bokf_trans_165590710314"
+  mv "$SKV_FILES" ~/Downloads/bokf_trans_165590710314
+fi
+
+#tmp exit
+#exit 0
+
+
 echo "Import kontoutdrag från skatteverket"
 import_kontoutdrag bokf_trans_165590710314 skv 1630
+#import_kontoutdrag "Bokförda\ transaktioner\ Alla\ typer\ " skv 1630
+
+
 echo "Import kontoutdrag från SEB"
 import_kontoutdrag Kontohändelser seb 1930
 
 exit 0
 
+# old import code, not used any more
+
 BASENAME=bokf_trans_165590710314
 
 echo "-------- DO SKVFILES -------------"
 
-SKVFILES=$(find ~/Downloads/ -name "$BASENAME*")
+SKVFILES=$(find ~/Downloads/ -name "$BASENAME*" | head -1)
 
 #echo "SKV files: $SKVFILES"
 

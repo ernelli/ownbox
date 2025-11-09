@@ -71,6 +71,8 @@ var options = Object.assign({
   validate: false,
   excel: false,
   corrections: "",
+  srudebug: "",
+  csvEncoding: ""
 },conf);
 
 var hushed = ("importSRUkoder").split(",").reduce( (a,v) => (a[v] = true,a), {});
@@ -479,16 +481,52 @@ function SKVcsv2json(cb) {
   return function transform(line) {
     var parts = line.split(';');
 
+    parts = parts.map( (p,i) => {
+      if(p.startsWith('"') && p.endsWith('"')) {
+	//console.log("remove \"");
+	p = p.slice(1,-1);
+
+	// if field is numerical with spaces
+	if(i >= 2 && p.match(/^-?[\d ]+$/)) {
+	  p = p.replace(/ /g, "");
+	}
+      }
+      return p;
+    });
+
     //console.log("parts: ", parts);
 
-    if(linenum === 0) {
+    var saldoField;
+
+    if(linenum < 2) {
+      console.log("Skip line: " + line);
+    } else if(linenum === 2) {
       if(!parts[1].startsWith("Ingående saldo")) {
+	console.log("not matching ingående saldo: " + parts[1]);
 	throw("SKV format changed, not starting with \"Ingående saldo\"");
       }
-      saldo = atoi(parts[2]);
+      if(parts[2]) {
+	console.log("saldo in field 3: " + parts[2]);
+	saldoField = parts[2];
+      } else {
+	console.log("saldo in field 4: " + parts[3]);
+	saldoField = parts[3];
+      }
+
+      saldo = atoi(saldoField);
     } else if (parts[1].startsWith("Utgående saldo")) {
-      if(atoi(parts[2]) !== saldo) {
-	throw("Invalid SKV transaction list, balance mismatch, " + itoa(atoi(parts[1])) + " != " + itoa(saldo));
+      console.log("check utgående saldo: " + line);
+
+
+      if(parts[2]) {
+	console.log("saldo in field 3: " + parts[2]);
+	saldoField = parts[2];
+      } else {
+	console.log("saldo in field 4: " + parts[3]);
+	saldoField = parts[3];
+      }
+      if(atoi(saldoField) !== saldo) {
+	throw("Invalid SKV transaction list, balance mismatch, " + itoa(atoi(saldoField)) + " != " + itoa(saldo));
       }
     } else {
       //console.log("line %d, parts: ", linenum, parts);
@@ -1353,7 +1391,7 @@ function importSRUkoder(filename) {
     var exclude = [];
     var matchsign;
 
-    //console.log("parse SRU rule: ", rule);
+    debug("parse SRU rule: ", rule);
 
     rule = rule.trim();
 
@@ -1622,7 +1660,7 @@ function importSRUfields(filename) {
       var cols = parseCSV2Array(line);
 
       if(lineNo === 4) {
-	console.log("Fields: ", cols);
+	debug("Fields: ", cols);
       } else if(lineNo > 4) {
 
 	var entry = {
@@ -1666,88 +1704,12 @@ function importSRUfields(filename) {
 
 async function importINK2S(filename) {
   INK2S_fields = await importSRUfields(filename);
-  console.log("number of INK2S fields: " + Object.keys(INK2S_fields).length);
+  debug("number of INK2S fields: " + Object.keys(INK2S_fields).length);
 }
 
 async function importINK2R(filename) {
   INK2R_fields = await importSRUfields(filename);
-  console.log("number of INK2R fields: " + Object.keys(INK2R_fields).length);
-}
-
-function importINK2S_old(filename) {
-  var prevLine = "";
-  var lineNo = 1;
-
-  var quoteCount = 0;
-
-  var currField;
-  
-  return new Promise( (resolve, reject) => {
-
-    lineReader(fs.createReadStream(filename, { encoding: 'utf8'}).on('end', () => {
-      debug("INK2S done");
-      //Object.keys(basKontoplan).forEach(k => console.log(basKontoplan[k].kontonr + ": " + basKontoplan[k].kontonamn));
-      return resolve();
-    })).on('line', (line) => {
-      //console.log("got line: " + line);
-
-      quoteCount += (line.match(/\"/g) || []).length;
-
-      if( quoteCount % 2 === 1) {
-	//console.log("odd quotes: " + line);
-	prevLine += line + '\n';
-	return;
-      }
-
-      if(prevLine.length) {
-	line = prevLine + line;
-	prevLine = "";
-      }
-
-      //var parts = line.split(',').map(p => {
-      //  return p.replace(/"/g, '').trim();
-      //});
-
-
-      var cols = parseCSV2Array(line);
-
-      if(lineNo === 4) {
-	console.log("Fields: ", cols);
-      } else if(lineNo > 4) {
-
-	var entry = {
-	  id: "",
-	  attribute: cols[0],
-	  field: cols[1],
-	  type: cols[2],
-	  mandatory: cols[3] === 'J',
-	  sign: cols[4],
-	};
-
-	var match;
-
-	if( (match=entry.attribute.match(/^(\d\.\d+[a-z]?). /)) ) {
-	  //console.log("FieldId: " + match[1]);
-	  currField = match[1];
-	  entry.id = currField;
-	} else {
-	  if( currField && (match=entry.attribute.match(/([a-z])\. /))) {
-	    entry.id = currField.match(/(\d\.\d+)/)[1] + match[1];
-	  }
-	}
-
-	//console.log("line: " + lineNo + ", " + json(entry));
-	INK2S_fields[entry.field] = entry;
-      }
-
-
-      lineNo++;
-
-      //if(cols[1] && cols[1].match(/^\d$/)) {
-      //  console.log("kontoklass: " + cols[1] + " : " + cols[2]);
-      //}
-    })
-  })
+  debug("number of INK2R fields: " + Object.keys(INK2R_fields).length);
 }
 
 
@@ -1869,7 +1831,7 @@ function writeBook(book, filename) {
 }
 
 function readBook(filename) {
-  console.log("readBook " + filename);
+  debug("readBook " + filename);
   return new Promise( (resolve, reject) => {
 
     var firstLine = true;
@@ -2548,6 +2510,10 @@ function autobook(t) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-130))) {
     addVerification({ trans: [ t, motkonto("6570")]});
+  } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-131.85))) {
+    addVerification({ trans: [ t, motkonto("6570")]});
+  } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-133.7))) {
+    addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2518")]});
   } else if(matchTransaction(t, /Arbetsgivaravgift/, "1630")) {
@@ -2627,7 +2593,7 @@ function autobook(t) {
 }
 
 function autobookTransactions() {
-  console.log("run autobook on unbooked transactions: ", transactions.filter(t => !t.registred).length);
+  debug("run autobook on unbooked transactions: ", transactions.filter(t => !t.registred).length);
   var numBooked = 0;
   transactions.forEach(t => {
     // only autobook unregistred transacions within end date/specified endDate
@@ -2640,7 +2606,7 @@ function autobookTransactions() {
       }
     }
   });
-  console.log("autobook done, remaining unbooked transactions: "  + transactions.filter(t => !t.registred).length);
+  debug("autobook done, remaining unbooked transactions: "  + transactions.filter(t => !t.registred).length);
 }
 
 var momsRapportMall = [
@@ -2914,30 +2880,34 @@ function generateDeklaration() {
   }
 
 
+  // sort all accounts in temp array
   var kontoMap = accountsList.slice(0).sort( (a,b) => { return (1*a.kontonr - 1*b.kontonr); } );
 
+  // map all accounts to SRU code, fail if a mapping missing.
   kontoMap.forEach(k => {
     k.sru = findSRUcode(k.kontonr);
 
     if(!k.sru) {
       console.log("sru kod for account: " + k.kontonr + ", not found");
+      throw ("generateDeklaration failed, sru code for account: " + k.kontonr + " not found");
     }
   });
 
   var ink2r = kontoMap.reduce( (a,v,i) => {
-    //  console.log("Check index: ", i, v);
+    console.log("Check index: ", i, v);
 
+    // new SRU code
     if(!i || a[a.length-1].sru.srukod !== v.sru.srukod) {
       a.push(Object.assign({},v));
 
       //console.log("new SRU code: " + v.sru.srukod);
-      //if(v.sru.srukod === "7368") {
-      //  console.log("ADD to 7368: " + itoa(v.saldo));
-      //}
+      if(v.sru.srukod === "7368") {
+        console.log("ADD to 7368: " + itoa(v.saldo));
+      }
     } else {
-      //if(v.sru.srukod === "7368") {
-      //  console.log("ADD to 7368: " + itoa(v.saldo));
-      //}
+      if(v.sru.srukod === "7368") {
+        console.log("ADD to 7368: " + itoa(v.saldo));
+      }
       a[a.length-1].saldo = add(a[a.length-1].saldo, v.saldo);
       a[a.length-1].konto +="," + v.kontonr;
     }
@@ -3805,7 +3775,7 @@ var cmds = {
     var t = SKVcsv2json((t) => {
       ws.write(JSON.stringify(t)+'\n');
     });
-    lineReader(fs.createReadStream(infile, { encoding: 'latin1'}).on('end', () => {
+    lineReader(fs.createReadStream(infile, { encoding: options.csvEncoding ? options.csvEncoding : 'latin1'}).on('end', () => {
       console.log("SKV done");
     })).on('line', (line) => t(line));
 
@@ -3870,7 +3840,15 @@ var cmds = {
     //filename = filename || options.accountingFile;
 
     if(filename) {
-      console.log("transfer book to: " + filename);
+      console.log("transfer book to given filename: " + filename);
+    } else {
+      options.rar++;
+      setDates();
+      filename = ["accounting", options.orgnummer, finansialYearString, "json"].join('.');
+      console.log("transfer book to generated filename: " + filename);
+    }
+    if(options.commit) {
+      console.log("write file: " + filename);
       writeBook( { accountsList: nextYear }, filename);
     }
   },
@@ -3946,7 +3924,7 @@ var args = JSON.parse(JSON.stringify(process.argv.slice(2)));
 options.interactive = process.stdout.isTTY ? true : false;
 
 for(var i = 0; i < args.length; i++) {
-//  console.log("check option: " + i + ", remaining args: ", args);
+  //console.log("check option: " + i + ", arg: " + args[i] + ", remaining args: ", args);
 
   if(args[i].startsWith("-") && !args[i].match(/-\d/)) {
     if(opts[args[i]]) {
@@ -3975,6 +3953,9 @@ for(var i = 0; i < args.length; i++) {
     args.splice(i--, 1);
   }
 }
+
+//console.log("options parsed:\n" + json(options));
+
 
 verbose = options.verbose;
 interactive = options.interactive && !options.nonInteractive;
@@ -4032,14 +4013,14 @@ async function run() {
   console.log("read book done in run");
 
   //lastVerificationDate.setDate(lastVerificationDate.getDate()-1);
-  console.log("lastVerificationDate: " + lastVerificationDate);
+  debug("lastVerificationDate: " + lastVerificationDate);
 
   //dumpTransactions('2731');
 
   //console.log("readBook: " + JSON.stringify(accounts['1730']));
   await safeReadJsonFile(options.transactionsFile, transactions);
 
-  console.log("safeReadJsonFile done: ");
+  debug("safeReadJsonFile done: ");
 
   var firstAddedVernr = verificationNumber;
 
