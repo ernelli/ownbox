@@ -72,7 +72,7 @@ do
     #echo -e "$DATELINE1\n$DATELINE2" | awk -F[,\;] '{print $1}' | sort | tail -1
 
     # extract date, which is first column, and sort and pick last date
-    DATE=$(echo -e "$DATELINE1\n$DATELINE2" | awk -F[,\;] '{print $1}' | sort | tail -1)
+    DATE=$(echo -e "$DATELINE1\n$DATELINE2" | awk -F[,\;] '{print $1}' | sort | tail -1 | sed 's|\"||g')
 
     echo "---------------"
     echo "DATE: $DATE"
@@ -83,7 +83,8 @@ do
     echo "MOVE: $FILE to $DST"
     cp $FILE ./archive/download
     if [[ $NO_COMMIT ]]; then
-       echo mv "$FILE" "$DST"
+	echo mv "$FILE" "$DST"
+	DST=$FILE
     else
        mv "$FILE" "$DST"
     fi
@@ -92,8 +93,8 @@ do
 
     # step 1, convert transactions from CSV to json
     echo ----------------------------------------
-    echo CONVERT TO JSON COMMAND: ./ownbox.js "${OPTIONS[@]}" $FORMAT "$DST" "$JSON"
-    ./ownbox.js "${OPTIONS[@]}" $FORMAT "$DST" "$JSON"
+    echo CONVERT TO JSON COMMAND: ./ownbox.js "${OPTIONS[@]}" --csv-encoding $CSV_ENCODING $FORMAT "$DST" "$JSON"
+    ./ownbox.js "${OPTIONS[@]}" --csv-encoding $CSV_ENCODING $FORMAT "$DST" "$JSON"
     echo CONVERT TO JSON DONE
     echo ----------------------------------------
 
@@ -124,11 +125,13 @@ fi
 
 
 echo "Import kontoutdrag från skatteverket"
+CSV_ENCODING=utf8
 import_kontoutdrag bokf_trans_165590710314 skv 1630
 #import_kontoutdrag "Bokförda\ transaktioner\ Alla\ typer\ " skv 1630
 
 
 echo "Import kontoutdrag från SEB"
+CSV_ENCODING=iso-8859-1
 import_kontoutdrag Kontohändelser seb 1930
 
 exit 0
