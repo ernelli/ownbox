@@ -52,6 +52,7 @@ var options = Object.assign({
   autoMoms: false,
   autobook: true,
   noAutobook: false,
+  ignoreLastVerificationDate: false, // if true, allow verifications before last registred verification
   transactionsEnd: "", // if set to a date, ignores transactions after that date
   autobookEndDate: "",
   importVerifications: true,
@@ -2148,7 +2149,8 @@ function addVerification(ver, check) {
       ver.verdatum = ver.trans[0].transdat || (new Date());
     }
 
-    if(!ver.korrigering && ver.verdatum < lastVerificationDate) {
+
+    if(!options.ignoreLastVerificationDate && !ver.korrigering && ver.verdatum < lastVerificationDate) {
       console.log("Verification date before last booked verification: %s < %s", ver.verdatum, lastVerificationDate);
       throw("verification date before last verification date in commited transactions");
     }
@@ -2514,6 +2516,8 @@ function autobook(t) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Banktjänster/, "1930", fromNumber(-133.7))) {
     addVerification({ trans: [ t, motkonto("6570")]});
+  } else if(matchTransaction(t, /5490990558/, "1930", fromNumber(-130))) {
+    addVerification({ vertext: "Banktjänster", trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2518")]});
   } else if(matchTransaction(t, /Arbetsgivaravgift/, "1630")) {
@@ -2548,7 +2552,9 @@ function autobook(t) {
 	    matchTransaction(t, /^6174443000/, "1930") ||
 	    matchTransaction(t, /^6093807100/, "1930") ||
 	    matchTransaction(t, /Gsuite ernel/, "1930") ||
-	    matchTransaction(t, /Google gsuit/, "1930")
+	    matchTransaction(t, /Google gsuit/, "1930") ||
+	    matchTransaction(t, /Bend/, "1930") ||
+	    matchTransaction(t, /Dublin/, "1930")
 	   ) {
     var ver = addVerification({ trans: [ t,
 			       trans("6540", neg(t.belopp)),
