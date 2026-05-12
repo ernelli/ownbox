@@ -52,6 +52,7 @@ var options = Object.assign({
   autoMoms: false,
   autobook: true,
   noAutobook: false,
+  mergeOverlap: false, // If true allows transactions before the last stored transaction to be added
   ignoreLastVerificationDate: false, // if true, allow verifications before last registred verification
   transactionsEnd: "", // if set to a date, ignores transactions after that date
   autobookEndDate: "",
@@ -424,11 +425,17 @@ function SEBcsv2json(cb) {
   var linenum = 0;
 
   const fieldsSEB = 'Bokföringsdatum,Valutadatum,Verifikationsnummer,Text/mottagare,Belopp,Saldo';
+  const fieldsSEB2 = 'Bokförd,Valutadatum,Text,Typ,Insättningar/uttag,Bokfört saldo';
 
   return function transform(line) {
     if(linenum === 0) {
-      if(line !== fieldsSEB) {
-	throw(["SEB format changed:", fieldsSEB, line].join('\n'));
+      line = line.replace(/^\uFEFF/, '');
+      if(line !== fieldsSEB && line !== fieldsSEB2) {
+	console.log("the check: ", line !== fieldsSEB, line !== fieldsSEB2);
+	console.log("LINE: [" + line + "]" + line.length);
+	console.log("SEB2: [" + fieldsSEB2 + "]" + fieldsSEB2.length);
+	console.log("CHECK: ", line !== fieldsSEB2);
+	throw(["SEB format changed:", fieldsSEB, fieldsSEB2, line].join('\n'));
       }
     } else {
       var parts = line.split(',');
@@ -451,6 +458,7 @@ function SEBcsv2json(cb) {
 	}
 	saldo -= res.belopp;
       }
+      console.log("got res: ", res);
       cb(res);
     }
     linenum++;
@@ -1115,28 +1123,45 @@ function addTranscations(transactions, newTransactions) {
 
   //console.log("add %d transactions to transacations: %d", newTransactions.length ,transactions.length);
 
-  while(transactions[ti] || newTransactions[ni]) {
-    //console.log("ni: %d, ti: %d", ni, ti);
-    if(transactions[ti] && newTransactions[ni]) {
-      //console.log("old t: ", transactions[ti]);
-      //console.log("new t: ", newTransactions[ni]);
-      if(isTransactionsEqual(transactions[ti], newTransactions[ni])) {
-	ti++; // keep old
-	ni++; // skip new
-      } else if(transactionSortFunction(transactions[ti], newTransactions[ni]) > 0) {
+  if(options.mergeOverlap) {
+    while(transactions[ti] || newTransactions[ni]) {
+      //console.log("ni: %d, ti: %d", ni, ti);
+      if(transactions[ti] && newTransactions[ni]) {
+	//console.log("old t: ", transactions[ti]);
+	//console.log("new t: ", newTransactions[ni]);
+
+	if(isTransactionsEqual(transactions[ti], newTransactions[ni])) {
+	  ti++; // keep old
+	  ni++; // skip new
+	} else if(transactionSortFunction(transactions[ti], newTransactions[ni]) > 0) {
+	  transactions.splice(ti, 0, newTransactions[ni]);
+	  addedTransactions.push(newTransactions[ni]);
+	  ti++;
+	  ni++;
+	} else {
+	  ti++;
+	}
+      } else if(newTransactions[ni]) {
 	transactions.splice(ti, 0, newTransactions[ni]);
 	addedTransactions.push(newTransactions[ni]);
-	ti++;
 	ni++;
       } else {
-	ti++;
+	break;
       }
-    } else if(newTransactions[ni]) {
-      transactions.splice(ti, 0, newTransactions[ni]);
-      addedTransactions.push(newTransactions[ni]);
-      ni++;
+    }
+  } else {
+    // add new transactions after old.
+    if(transactions.length > 0) {
+      var last = transactions[transactions.length-1];
+      while(newTransactions[ni] && (last.transdat.getTime() >= newTransactions[ni].transdat.getTime()) ) {
+	console.log("SKIP %s, before: %s", json(newTransactions[ni]), json(last));
+	ni++;
+      }
+      console.log("START adding:  %s, before: %s", json(newTransactions[ni]), json(last));
+      transactions.push(...newTransactions.slice(ni));
+      addedTransactions.push(...newTransactions.slice(ni));
     } else {
-      break;
+      transactions.push(...newTransactions);
     }
   }
 
@@ -2518,6 +2543,8 @@ function autobook(t) {
     addVerification({ trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /5490990558/, "1930", fromNumber(-130))) {
     addVerification({ vertext: "Banktjänster", trans: [ t, motkonto("6570")]});
+  } else if(matchTransaction(t, /^Annan/, "1930", fromNumber(-130))) {
+    addVerification({ vertext: "Banktjänster", trans: [ t, motkonto("6570")]});
   } else if(matchTransaction(t, /Debiterad preliminärskatt/, "1630")) {
     addVerification({ trans: [ t, motkonto("2518")]});
   } else if(matchTransaction(t, /Arbetsgivaravgift/, "1630")) {
@@ -2553,8 +2580,13 @@ function autobook(t) {
 	    matchTransaction(t, /^6093807100/, "1930") ||
 	    matchTransaction(t, /Gsuite ernel/, "1930") ||
 	    matchTransaction(t, /Google gsuit/, "1930") ||
+	    matchTransaction(t, /Google works/, "1930") ||
 	    matchTransaction(t, /Bend/, "1930") ||
-	    matchTransaction(t, /Dublin/, "1930")
+	    matchTransaction(t, /Dublin/, "1930") ||
+	    matchTransaction(t, /DUBLIN/, "1930") ||
+	    matchTransaction(t, /GOOGLE WORKS/, "1930") ||
+	    matchTransaction(t, /BEND/, "1930") ||
+	    matchTransaction(t, /6093807100/, "1930")
 	   ) {
     var ver = addVerification({ trans: [ t,
 			       trans("6540", neg(t.belopp)),
@@ -2872,6 +2904,60 @@ function safeReadJsonFile(filename, array) {
 }
 
 
+function calculateResultat() {
+  var intäkter = zero();
+
+  accountsList.filter(k => basKontotyp(k.kontonr) === 'I').forEach(k => {
+    intäkter = add(intäkter, k.saldo);
+  });
+  console.log("intäkter: " + itoa(intäkter));
+
+  var kostnader = zero();
+  accountsList.filter(k => basKontotyp(k.kontonr) === 'K').forEach(k => {
+    kostnader = add(kostnader, k.saldo);
+  });
+  console.log("kostnader: " + itoa(kostnader));
+
+  var resultat = neg(add(kostnader, intäkter));
+
+  console.log("\nResultat före skatt bokföringsdispositioner: " + itoa(resultat));
+
+  var bokfposter = zero();
+  accountsList.filter(k => basKontotyp(k.kontonr) === 'B').forEach(k => {
+    bokfposter = add(bokfposter, k.saldo);
+  });
+
+  console.log("\nfinansiella poster och bokförings dispositioner: " + itoa(bokfposter));
+
+  var skattefriaIntäkter = accounts["8314"] ? neg(accounts["8314"].saldo) : ZERO;
+  var ickeAvdragsgillaKonton = ("5099,5199,6072,6342,6982,6992,7622,7623,7632,8423").split(",").reduce( (a,v,i) => (a.add(v), a), new Set);
+  var ickeAvdragsgillaKostnader = sumAccounts( (k => ickeAvdragsgillaKonton.has(k.kontonr)) );
+  var skattemässigtResultat = sub(add(resultat, ickeAvdragsgillaKostnader), skattefriaIntäkter); //add(resultat, ickeAvdragsgillaKostnader);
+  var åretsSkatt = isneg(skattemässigtResultat) ? zero() :  floor(muldiv(mul(fromNumber(10),div(skattemässigtResultat, fromNumber(10))), skattesatser.bolagsskatt, 10000));
+  var åretsResultat = sub(resultat, åretsSkatt);
+
+  console.log("\nIcke avdragsgilla kostnader: " + itoa(ickeAvdragsgillaKostnader));
+  console.log("\nSkattefria intäkter: ", itoa(skattefriaIntäkter));
+  console.log("\nSkattemässigt resultat: " + itoa(skattemässigtResultat));
+  console.log("\nSkatt (%s) på årets resultat: " + itoa(åretsSkatt), ""+(skattesatser.bolagsskatt/100) + "%");
+  console.log("\nÅrets resultat: " + itoa(åretsResultat));
+
+  return {
+    intäkter: intäkter,
+    kostnader: kostnader,
+    resultat: resultat,
+
+    bokfposter: bokfposter,
+    skattefriaIntäkter: skattefriaIntäkter,
+    ickeAvdragsgillaKostnader: ickeAvdragsgillaKostnader,
+
+    skattemässigtResultat: skattemässigtResultat,
+
+    åretsSkatt: åretsSkatt,
+    åretsResultat: åretsResultat
+  };
+}
+
 function generateDeklaration() {
 
   function fieldCode(code, balance) {
@@ -3113,6 +3199,9 @@ var cmds = {
   },
   testink2s: function() {
     importINK2S(options.ink2skoder);
+  },
+  testbalans: function(konto) {
+    console.log("konto: " + konto + ", isBalans: " + isBalanskonto(konto));
   },
   prevmonth: function(date) {
     date = (date && new Date(date)) || new Date();
@@ -3770,7 +3859,7 @@ var cmds = {
     var t = SEBcsv2json((t) => {
       ws.write(JSON.stringify(t)+'\n');
     });
-    lineReader(fs.createReadStream(infile, { encoding: 'latin1'}).on('end', () => {
+    lineReader(fs.createReadStream(infile, { encoding: options.csvEncoding ? options.csvEncoding : 'utf8'}).on('end', () => {
       console.log("SEB done");
     })).on('line', (line) => t(line));
 
@@ -3781,7 +3870,7 @@ var cmds = {
     var t = SKVcsv2json((t) => {
       ws.write(JSON.stringify(t)+'\n');
     });
-    lineReader(fs.createReadStream(infile, { encoding: options.csvEncoding ? options.csvEncoding : 'latin1'}).on('end', () => {
+    lineReader(fs.createReadStream(infile, { encoding: options.csvEncoding ? options.csvEncoding : 'utf8'}).on('end', () => {
       console.log("SKV done");
     })).on('line', (line) => t(line));
 
@@ -3790,6 +3879,7 @@ var cmds = {
   mergetrans: function(mergeFile, account) {
 //    safeReadJsonFile(options.transactionsFile, transactions).then( () => {
 
+    console.log("DOING mergetrans on mergeFile: " + mergeFile);
 
       //console.log("transactions length: " + transactions.length);
       return readJsonFile(mergeFile).then( (merge) => {
@@ -3811,7 +3901,7 @@ var cmds = {
 	  return;
 	}
 
-	//mergedTransactions.forEach(t => console.log(JSON.stringify(t)));
+	mergedTransactions.forEach(t => console.log("FOREACH: " + JSON.stringify(t)));
 
 	var addedTransactions = addTranscations(transactions, mergedTransactions);
 	console.log("added %d transactions", addedTransactions.length);
@@ -4094,7 +4184,7 @@ async function run() {
 
   }
 
-  var showMax = 10;
+  var showMax = 100;
   transactions.filter(t => !t.registred).every(t => {
     if(showMax === 10) {
       console.log("Unbooked transactions:");

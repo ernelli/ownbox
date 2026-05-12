@@ -83,13 +83,13 @@ do
     echo "MOVE: $FILE to $DST"
     cp $FILE ./archive/download
     if [[ $NO_COMMIT ]]; then
-	echo mv "$FILE" "$DST"
+	echo NO_COMMIT, would have: mv "$FILE" "$DST"
 	DST=$FILE
     else
        mv "$FILE" "$DST"
     fi
     echo "convert $FORMAT to json and merge transactions"
-    JSON="$FILE_STORE/skv.$DATE.json"
+    JSON="$FILE_STORE/$FORMAT.$DATE.json"
 
     # step 1, convert transactions from CSV to json
     echo ----------------------------------------
@@ -101,7 +101,7 @@ do
     # step 1, merge transactions with existing, e.g, add all new transactions not present
     echo ----------------------------------------
     echo MERGE TRANSACTIONS COMMAND:  ./ownbox.js "${OPTIONS[@]}" --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
-    ./ownbox.js "${OPTIONS[@]}" --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
+    ./ownbox.js "${OPTIONS[@]}" --merge-overlap --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
     echo MERGE TRANSACTIONS done
     echo ----------------------------------------
 done
@@ -110,7 +110,7 @@ done
 }
 
 
-echo "rename downloaded file"
+echo "rename downloaded files"
 
 SKV_FILES=$(find ~/Downloads/ -name "Bokförda\ transaktioner*")
 
@@ -119,6 +119,15 @@ if [[ $SKV_FILES != "" ]]; then
   echo "mv $SKV_FILES ~/Downloads/bokf_trans_165590710314"
   mv "$SKV_FILES" ~/Downloads/bokf_trans_165590710314
 fi
+
+SEB_FILES=$(find ~/Downloads/ -name 'Transaktioner\ *.csv')
+
+if [[ $SEB_FILES != "" ]]; then
+  echo "found SEB_FILES: -$SEB_FILES-"
+  echo "mv $SEB_FILES ~/Downloads/Kontohändelser.csv"
+  mv "$SEB_FILES" ~/Downloads/Kontohändelser.csv
+fi
+
 
 #tmp exit
 #exit 0
@@ -131,11 +140,34 @@ import_kontoutdrag bokf_trans_165590710314 skv 1630
 
 
 echo "Import kontoutdrag från SEB"
-CSV_ENCODING=iso-8859-1
+CSV_ENCODING=utf8
 import_kontoutdrag Kontohändelser seb 1930
 
 exit 0
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#
+#
+#
+#
 # old import code, not used any more
 
 BASENAME=bokf_trans_165590710314
