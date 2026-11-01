@@ -737,6 +737,26 @@ function dateInRange(d, from, to) {
   throw (`dateInRange, invalid parameters ${d}, ${from}, ${to}`);
 }
 
+function periodDecode(dateVal) {
+  var match;
+  if(match = dateVal.match(/Q([1234])/)) {
+//    console.log("Quarter: " + match[1]);
+    var quarter = 1*match[1];
+    var now = new Date();
+    now.setMonth(3*quarter);
+    now.setDate(0);
+    dateVal = formatDate(now);
+  } else if(match = dateVal.match(/P([1234])/)) {
+//    console.log("Period: " + match[1], "startDate: ", startDate);
+    var period = 1*match[1];
+    var now = new Date(startDate);
+
+    now.setMonth(now.getMonth()+3*period);
+    now.setDate(0);
+    dateVal = formatDate(now);
+  }
+  return dateVal;
+}
 
 //console.log("Räkenskapsår: " + options.räkenskapsår);
 
@@ -797,6 +817,7 @@ function setDates() {
   console.log("finansialYearString: " + finansialYearString);
 
   if(options.autobookEndDate) {
+    options.autobookEndDate = periodDecode(options.autobookEndDate);
     console.log("Restrict autobooking verfications/transactions up to: " + options.autobookEndDate);
     options.autobookEndDate = new Date(options.autobookEndDate);
   }
@@ -4156,6 +4177,8 @@ async function run() {
       } else {
 	await writeBook({ accountsList: accountsList, verifications: verifications }, outfile);
       }
+    } else {
+      console.log("options.commit: ", options.commit, "accounting ledger not written");
     }
   } else {
     debug("accounting ledger has NOT changed: %d == %s", verificationNumber, lastVerificationNumber);
@@ -4174,17 +4197,21 @@ async function run() {
       } else {
 	await writeTransactions(options.transactionsFile);
       }
+    } else {
+      console.log("options.commit: ", options.commit, "transactions not written");
     }
   }
 
   if(options.dumpTransactions) {
+    console.log("options.dumpTransactions: ", options.dumpTransactions, ", dump transactions");
+    console.log("----------------------------------------");
       transactions.forEach(t => {
 	console.log(json(t));
       });
-
+    console.log("----------------------------------------");
   }
 
-  var showMax = 100;
+  var showMax = 10;
   transactions.filter(t => !t.registred).every(t => {
     if(showMax === 10) {
       console.log("Unbooked transactions:");

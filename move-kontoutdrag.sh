@@ -91,14 +91,17 @@ do
     echo "convert $FORMAT to json and merge transactions"
     JSON="$FILE_STORE/$FORMAT.$DATE.json"
 
-    # step 1, convert transactions from CSV to json
     echo ----------------------------------------
+    echo step 1, convert transactions from CSV to json
+    echo ----------------------------------------
+
     echo CONVERT TO JSON COMMAND: ./ownbox.js "${OPTIONS[@]}" --csv-encoding $CSV_ENCODING $FORMAT "$DST" "$JSON"
     ./ownbox.js "${OPTIONS[@]}" --csv-encoding $CSV_ENCODING $FORMAT "$DST" "$JSON"
     echo CONVERT TO JSON DONE
     echo ----------------------------------------
 
-    # step 1, merge transactions with existing, e.g, add all new transactions not present
+    echo ----------------------------------------
+    echo step 2, merge transactions with existing, e.g, add all new transactions not present
     echo ----------------------------------------
     echo MERGE TRANSACTIONS COMMAND:  ./ownbox.js "${OPTIONS[@]}" --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
     ./ownbox.js "${OPTIONS[@]}" --merge-overlap --no-autobook --no-import-verifications $COMMIT mergetrans "$JSON" $ACCOUNT
@@ -141,6 +144,7 @@ import_kontoutdrag bokf_trans_165590710314 skv 1630
 
 echo "Import kontoutdrag från SEB"
 CSV_ENCODING=utf8
+#CSV_ENCODING=latin1
 import_kontoutdrag Kontohändelser seb 1930
 
 exit 0
